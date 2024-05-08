@@ -186,7 +186,7 @@ class Llama:
         for cur_pos in range(min_prompt_len, total_len):
             print(f"Current position is: {cur_pos}, please input your positions to mask")
             print("lists are split by ' ' and numbers are split by ',' ")
-            print("and if you want to skip this, just input 'skip'")
+            # print("and if you want to skip this, just input 'skip'")
             user_input = input()  # Example user input: "1,2;4,5;7"
             mask_groups = user_input.split(';')  # Split into different groups by ';'
             probs = None
