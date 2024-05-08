@@ -452,59 +452,51 @@ class Transformer(nn.Module):
             # Adding this multiplier instead of using 4096 directly allows for dynamism of token lengths while training or fine-tuning.
             self.params.dim // self.params.n_heads, self.params.max_seq_len * 2
         )
+        self.cnt = 0 #count the token generation
 
     @torch.inference_mode()
-    def forward(self, tokens: torch.Tensor, start_pos: int):
+    def forward(self, tokens: torch.Tensor, start_pos: int, mask_pos: list):
         """
         Perform a forward pass through the Transformer model.
 
         Args:
             tokens (torch.Tensor): Input token indices.
             start_pos (int): Starting position for attention caching.
+            mask_pos (list): Positions to apply masking.
 
         Returns:
             torch.Tensor: Output logits after applying the Transformer model.
-
         """
         _bsz, seqlen = tokens.shape
-        # print(tokens)
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
-        freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
+        freqs_cis = self.freqs_cis[start_pos: start_pos + seqlen]
 
-        mask = None
+        # Create a mask filled with zeros
+        mask = torch.full((seqlen, seqlen), float("0"), device=tokens.device)
+        mask = torch.triu(mask, diagonal=1)
+
+        # Adjust the mask to be filled with -inf values above the diagonal
         if seqlen > 1:
-            mask = torch.full(
-                (seqlen, seqlen), float("-inf"), device=tokens.device
-            )
-
+            mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device)
             mask = torch.triu(mask, diagonal=1)
 
-            # When performing key-value caching, we compute the attention scores
-            # only for the new sequence. Thus, the matrix of scores is of size
-            # (seqlen, cache_len + seqlen), and the only masked entries are (i, j) for
-            # j > cache_len + i, since row i corresponds to token cache_len + i.
-            mask = torch.hstack([
-                torch.zeros((seqlen, start_pos), device=tokens.device),
-                mask
-            ]).type_as(h)
-        else :
-            mask = torch.full(
-                (seqlen, seqlen), float("0"), device=tokens.device
-            )
+        # Initialize a zero mask for positions before the start position
+        zero_mask = torch.zeros((seqlen, start_pos), device=tokens.device)
 
-            mask = torch.triu(mask, diagonal=1)
-            zero_mask = torch.zeros((seqlen, start_pos), device=tokens.device)
-            
-            random_col = torch.randint(start_pos, (1,)).item()
-            # print(random_col)
-            # random_col = 4
-            zero_mask[:, random_col] = float('-inf')  
-            
-            mask = torch.hstack([
-                zero_mask,
-                mask
-            ]).type_as(h)
+        # Apply masking at specified positions in mask_pos
+        if mask_pos: # Check if there are positions to mask
+            for pos in mask_pos:
+                if pos < start_pos and pos >= 0:
+                    zero_mask[:, pos] = float('-inf')
+
+        # Concatenate the zero mask with the main mask
+        mask = torch.hstack([
+            zero_mask,
+            mask
+        ]).type_as(h)
+
+        # Process through layers
         for layer in self.layers:
             h = layer(h, start_pos, freqs_cis, mask)
         h = self.norm(h)
