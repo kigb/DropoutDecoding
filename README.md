@@ -10,6 +10,12 @@ torchrun --nproc_per_node 1 test.py     --ckpt_dir {$model_path}     --tokenizer
 `
 the output will be stored in output1.txt
 
+better just generate one text at one time(batch size = 1), or the generation would be quite complex
+
 ### modified files
 
 The modification is mainly in `./llama/model.py`---`Tranformer`---`forward` and `./llama/generate.py`---`generate`
+
+### Migrate to llama3
+
+Currently easy to be migrated to llama3, just substitute the modified part. Mention that the modified parts are the same in llama3.
