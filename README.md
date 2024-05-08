@@ -1,4 +1,6 @@
-Masked_llama
+# Masked_llama
+
+## how to use
 
 run `pip install -r requirements.txt` to install all packages
 
@@ -8,6 +10,6 @@ torchrun --nproc_per_node 1 test.py     --ckpt_dir {$model_path}     --tokenizer
 `
 the output will be stored in output1.txt
 
-The main modification is in ./llama/model.py, from line 457-512. Current mask is in the transformer level, however, attention level mask is the goal.
+### modified files
 
-./llama/model_edit.py contains iterating each mask in each round of generation, nevertheless may need code review.
+The modification is mainly in `./llama/model.py`---`Tranformer`---`forward` and `./llama/generate.py`---`generate`
