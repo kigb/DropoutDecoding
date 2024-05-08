@@ -184,19 +184,50 @@ class Llama:
             )
 
         for cur_pos in range(min_prompt_len, total_len):
-            logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
-            if temperature > 0:
-                probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-                next_token = sample_top_p(probs, top_p)
-            else:
-                next_token = torch.argmax(logits[:, -1], dim=-1)
+            print(f"Current position is: {cur_pos}, please input your positions to mask")
+            print("lists are split by ' ' and numbers are split by ',' ")
+            print("and if you want to skip this, just input 'skip'")
+            user_input = input()  # Example user input: "1,2;4,5;7"
+            mask_groups = user_input.split(';')  # Split into different groups by ';'
+            probs = None
+            next_token = None
+            group_index = 0
+            tokens_collected = []
+            for group in mask_groups:
+                if group.strip() == "":  # Skip if the group is empty
+                    mask_positions = [-1]
 
-            next_token = next_token.reshape(-1)
-            # only replace token if prompt has already been generated
-            next_token = torch.where(
-                input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
-            )
-            tokens[:, cur_pos] = next_token
+                else:
+                    # Split the group into numbers and convert to integers
+                    mask_positions = [int(pos) for pos in group.split(',') if pos.strip().isdigit()]
+
+                    # Ensure all positions are within the valid range
+                    mask_positions = [pos for pos in mask_positions if pos >= 0 and pos < total_len]
+                logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos,mask_positions)
+                if temperature > 0:
+                    probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
+                    next_token = sample_top_p(probs, top_p)
+                else:
+                    next_token = torch.argmax(logits[:, -1], dim=-1)
+
+                next_token = next_token.reshape(-1)
+                # only replace token if prompt has already been generated
+                next_token = torch.where(
+                    input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
+                )
+                tokens_collected.append(next_token)  # Save next_token for later selection
+                for i in range(bsz):
+                    print(f"Group {group_index}: {self.tokenizer.decode(next_token[i].item())}", end=" ;")
+                group_index += 1  # Increment the group index after processing each group
+            if group_index == 1:
+                print("\n")
+                tokens[:, cur_pos] = tokens_collected[0]
+            else:
+                print("\nSelect a token index from above to continue generation:")
+                selected_index = int(input())
+                selected_token = tokens_collected[selected_index]
+                tokens[:, cur_pos] = selected_token
+            
             if logprobs:
                 token_logprobs[:, prev_pos + 1 : cur_pos + 1] = -F.cross_entropy(
                     input=logits.transpose(1, 2),
