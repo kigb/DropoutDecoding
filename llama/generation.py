@@ -186,6 +186,11 @@ class Llama:
         for cur_pos in range(min_prompt_len, total_len):
             print(f"Current position is: {cur_pos}, please input your positions to mask")
             print("lists are split by ' ' and numbers are split by ',' ")
+            # print all tokens in the current position with its index
+            for i in range(bsz):
+                for j in range(cur_pos):
+                    print(f"Token {j}: {self.tokenizer.decode(tokens[i, j].item())}", end=" ;")
+                
             # print("and if you want to skip this, just input 'skip'")
             user_input = input()  # Example user input: "1,2;4,5;7"
             mask_groups = user_input.split(';')  # Split into different groups by ';'
