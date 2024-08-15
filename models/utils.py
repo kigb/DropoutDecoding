@@ -24,6 +24,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         self.start_image_pos = [] # 用于记录图片起始位置
         self.end_image_pos = [] # 用于记录图片结束位置
         self.is_first_generation = False # 用于记录是否是第一次生成
+        self.image_features = None # 用于记录图片特征
 
     def _merge_input_ids_with_image_features(
         self,
@@ -480,7 +481,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
 
         if self.is_first_generation:
             # 第一次生成，需要记录image feature
-            a = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
+            self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
 
         # 用处理后后的attention_mask进行生成
         # attention_mask = custom_attention_mask(attention_mask=attention_mask)
@@ -580,6 +581,20 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         values, ids = self.get_topk_token_id(image_logits)
         image_features = (values, ids)
         return image_features
+    
+    def get_common_token_ids(self, image_features, k=5):
+        """
+        get common token ids
+
+        Args:
+            image_features: image token features
+        
+        Returns:
+            common_token_ids: chooose common token ids from all image token ids
+            
+        """
+        image_ids = image_features[1]
+        # calculate common token ids set
     
     
 import torch.nn.functional as F

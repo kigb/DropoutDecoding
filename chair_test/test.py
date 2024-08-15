@@ -13,6 +13,7 @@ import requests
 from PIL import Image
 from io import BytesIO
 from collections import defaultdict
+from chair_test.chair_metrics import chair
 def load_image(image_file):
     if image_file.startswith('http://') or image_file.startswith('https://'):
         response = requests.get(image_file)
@@ -29,6 +30,105 @@ def load_coco_data(data_dir):
     coco_anns = json.loads(lines[0])
     coco = COCO(caption_file_path)
     return coco, coco_anns
+
+def chair_eval(chair_input_path, model_type,num_images,output_dir,dataset_name,data_dir,metric,verbosity=False):
+    
+    if verbosity:
+        print("\nchair_input_path: ", chair_input_path)
+
+    # sanity check between caption file and command line arguments
+    model_name = "llava"
+    
+    # dataset_name_identified = chair_input_path.split("/")[-1].split("_")[-4]
+
+    # if dataset_name_identified != dataset_name:
+    #     raise Exception(
+    #         f"Dataset name in caption file {dataset_name_identified} does not match command line argument {dataset_name}."
+    #     )
+    # update output dir
+    output_dir = os.path.join(
+        output_dir, metric, f"{model_name}_{model_type}", dataset_name
+    )
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # annotation path should be under data dir
+    annotation_dir = f"{data_dir}/annotations"
+    # load the generated captions
+    _, imids, _ = chair.load_generated_captions(chair_input_path)
+    print("load generation")
+    # initialize CHAIR with generated captions and annotations
+    evaluator = chair.CHAIR(imids, annotation_dir)
+    evaluator.get_annotations()
+    # compute chair metrics
+    cap_dict = evaluator.compute_chair(chair_input_path)
+    # save to json pretty print
+    chair_json_path = os.path.join(
+        output_dir,
+        f"{model_name}_{model_type}_{dataset_name}_num_images_{num_images}_chair_results.json",
+    )
+    with open(chair_json_path, "w") as f:
+        json.dump(cap_dict, f, indent=4)
+    # print metric
+    metric_string_ce = chair.print_metrics(cap_dict, quiet=False)
+
+    # save results
+    result_path = os.path.join(
+        output_dir,
+        f"{model_name}_{model_type}_{dataset_name}_num_images_{num_images}_chair_results.txt",
+    )
+    with open(result_path, "w") as f:
+        f.write(metric_string_ce)
+    if verbosity:
+        print(f"\nCHAIR results saved to {result_path}.")
+
+    halc_caption_result = cap_dict["sentences"]
+    halc_result = {}
+    for i in halc_caption_result:
+        halc_result[i["image_id"]] = {"caption": i["caption"], 
+                                    "cider": max(np.log10(i["metrics"]["CIDEr"])+20, 0),
+                                    "meteor": i["metrics"]["METEOR"],
+                                    "chairs": i["metrics"]["CHAIRs"],
+                                    "chairi": i["metrics"]["CHAIRi"],
+                                    "bleu": (i["metrics"]["Bleu_1"] + i["metrics"]["Bleu_2"] + i["metrics"]["Bleu_3"] + i["metrics"]["Bleu_4"])/4,
+                                    "objects_num": len(i["mscoco_generated_words"]),
+                                    "words_num": len(i["words"]),
+                                    "hallucinate_num": len(i["hallucination_idxs"])}
+
+    # print(halc_result)
+    cider_sum = 0
+    chairs_sum = 0
+    object_sum = 0
+    meteor_sum = 0
+    bleu_sum = 0
+    words_sum = 0
+    hallucinate_sum = 0
+
+
+    hallucinate_sum_max = 2
+    hallucinate_index_list = []
+
+    for i in halc_result:
+        meteor_sum += halc_result[i]["meteor"]
+        bleu_sum += halc_result[i]["bleu"]
+        cider_sum += halc_result[i]["cider"]
+        chairs_sum += halc_result[i]["chairs"]
+        object_sum += halc_result[i]["objects_num"]
+        words_sum += halc_result[i]["words_num"]
+        hallucinate_sum += halc_result[i]["hallucinate_num"]
+        
+
+    meteor_sum = meteor_sum / len(halc_result)
+    log_cider_sum = cider_sum / len(halc_result)
+    chairs_sum = chairs_sum / len(halc_result)
+    chairi_sum = hallucinate_sum / object_sum
+    bleu_sum = bleu_sum / len(halc_result)
+    print("meteor: ", meteor_sum)
+    print("log_cider: ", log_cider_sum)
+    print("chairs: ", chairs_sum)
+    print("chairi: ", chairi_sum)
+    print("bleu: ", bleu_sum)
+    print("hallucinate_sum: ", hallucinate_sum)
 
 def main(args):
     # load model
@@ -187,15 +287,22 @@ def main(args):
 
     # save the formulated output dict
     formulated_output_path = "/home/fyx/vlm_results/"
-    formulated_output_path = formulated_output_path + args.save_name 
+    formulated_output_path = formulated_output_path + filename
 
     with open(formulated_output_path, "w") as f:
         json.dump(formulated_output_dict, f)
     
     print("output file saved at: ", formulated_output_path)
 
+    # -------- start chair eval --------
+    data_dir = "vlm_halu/HALC/eval/chair_metrics"
+    chair_input_path = formulated_output_path
+    method = args.method
+    chair_eval(chair_input_path=chair_input_path, model_type="llava",num_images=200,output_dir="./results",dataset_name="coco",data_dir=data_dir,metric=method,verbosity=True)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-name",type=str, default="output")
+    parser.add_argument("--method", type=str, default="None")
     args = parser.parse_args()
     main(args)
