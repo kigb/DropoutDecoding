@@ -335,9 +335,12 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             if vision_feature_select_strategy is not None
             else self.config.vision_feature_select_strategy
         )
-
-        if inputs_embeds is None:
+        if input_ids.shape[-1]!=1:
             self.is_first_generation = True
+        else:
+            self.is_first_generation = False
+        if inputs_embeds is None:
+            
             # 1. Extract the input embeddings
             # In case image_token_index is not in the embeddings (extra token but embedding don't have it)
             for_inputs_embeds_ids = input_ids.clone()
@@ -446,8 +449,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 attention_mask = torch.cat((extended_attention_mask, attention_mask[:, -target_length:]), dim=1)
 
                 position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
-        else :
-            self.is_first_generation = False
+       
         # 假设默认为use cache，这样不需要在generate函数中传入start_generation_pos
         # 暂时假设不是batch generation，后续直接修改即可
         if self.is_first_generation:
@@ -456,12 +458,12 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         def custom_attention_mask(attention_mask, random_prob=0.1):
             # 生成随机的attention_mask，设置第二个维度从start_generation_pos开始的位置到末尾以random_prob为概率进行mask
             random_mask = torch.rand(attention_mask.shape[-1] - start_generation_pos).to(attention_mask.device) < random_prob
-            attention_mask[:, start_generation_pos:] = random_mask
+            attention_mask[:, self.start_generation_pos:] = random_mask
             return attention_mask
 
         
         def restore_attention_mask(attention_mask):
-            attention_mask[:, start_generation_pos:] = 1
+            attention_mask[:, self.start_generation_pos:] = 1
             return attention_mask
         
         # kv会改变，需要深拷贝来进行储存
@@ -478,25 +480,33 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
+        logits = outputs['logits']
         if self.is_first_generation:
             # 第一次生成，需要记录image feature
             self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
-
-        # 用处理后后的attention_mask进行生成
-        # attention_mask = custom_attention_mask(attention_mask=attention_mask)
-        # outputs_random = self.language_model(
-        #     attention_mask=attention_mask,
-        #     position_ids=position_ids,
-        #     past_key_values=original_past_key_values,
-        #     inputs_embeds=inputs_embeds,
-        #     use_cache=use_cache,
-        #     output_attentions=output_attentions,
-        #     output_hidden_states=output_hidden_states,
-        #     return_dict=return_dict,
-        # )
-        # logits_random = outputs_random[0]
-        # attention_mask = restore_attention_mask(attention_mask)
+        if not self.is_first_generation:
+            # 用处理后后的attention_mask进行生成
+            attention_mask = self.get_image_attention_mask(logits, attention_mask)
+            outputs_1 = self.language_model(
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=original_past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            logits_1 = outputs_1[0]
+            attention_mask = restore_attention_mask(attention_mask)
+            loss = None
+            return LlavaNextCausalLMOutputWithPast(
+                loss=loss,
+                logits=logits_1,
+                past_key_values=outputs_1.past_key_values,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
+            )
 
         # raise EarlyExitException("Early exit triggered", outputs)
         # logits = outputs[0]
@@ -520,7 +530,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
-        logits = outputs[0]
+        
         return LlavaNextCausalLMOutputWithPast(
             loss=loss,
             logits=logits,
@@ -582,20 +592,70 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         image_features = (values, ids)
         return image_features
     
-    def get_common_token_ids(self, image_features, k=5):
+    def get_overlap_image_tokens(self,logits,topk=5):
         """
-        get common token ids
+        get overlap image tokens
 
         Args:
-            image_features: image token features
+            logits: model outputs['logits']
+            topk: topk k
+
+        Returns:
+            overlap_image_tokens: overlap image tokens
+        """
+        max_ids = torch.argmax(logits, dim=-1)  # [batch_size, sequence_length]
+
+        # 假设 image_features 的形状为 [batch_size, 1948, 5]，取出存储的 top 5 ids
+        top5_ids = self.image_features[1]  # [batch_size, 1948, 5]
+
+        # 在第二维度(1948)进行广播比较
+        # 扩展 max_ids 的维度为 [batch_size, sequence_length, 1]
+        # top5_ids 的维度为 [batch_size, 1948, 5]
+        # 进行广播比较得到匹配的布尔矩阵 match, 形状为 [batch_size, sequence_length, 1948, 5]
+        match = torch.isin(max_ids.unsqueeze(-1).unsqueeze(-1), top5_ids)
+
+        # 对 match 进行任何一个维度上的 "或" 操作，得到 [batch_size, sequence_length, 1948] 的布尔矩阵
+        match_any = match.any(dim=-1)
+
+        # 如果希望在所有 sequence_length 中都匹配到某个 1948 的位置，可以对 sequence_length 维度再进行 "或" 操作
+        # 得到 [batch_size, 1948] 的布尔矩阵
+        matched_indices = match_any.any(dim=1)
+
+        # 提取出匹配到的索引
+        matched_indices = matched_indices.nonzero(as_tuple=True)[1]  # 提取 1948 维度上的索引
+
+        # 如果需要将这些匹配到的索引加上 self.start_image_pos[0] 的偏移量
+        offset = self.start_image_pos[0]
+        adjusted_indices = matched_indices + offset
+
+        # 返回调整后的索引
+        return adjusted_indices
+    
+    def get_image_attention_mask(self,logits,attention_mask,method="overlap"):
+        """
+        get image attention mask
+
+        Args:
+            logits: model outputs['logits']
+            method: method to get image attention mask
         
         Returns:
-            common_token_ids: chooose common token ids from all image token ids
-            
+            image_attention_mask: image attention mask
         """
-        image_ids = image_features[1]
-        # calculate common token ids set
-    
+        if method == "overlap":
+            matched_indices = self.get_overlap_image_tokens(logits)
+            # 假设 self.start_image_pos[0] 是一个整数，表示偏移量
+            offset = self.start_image_pos[0]
+
+            # 将偏移量加到 matched_indices 上
+            adjusted_indices = [index + offset for index in matched_indices]
+            adjusted_indices_tensor = torch.tensor(adjusted_indices)
+            if adjusted_indices_tensor.shape[0] == 0:
+                return attention_mask
+            # 更新 attention_mask，设定这些位置的值为 0
+            attention_mask[:, adjusted_indices_tensor] = 0
+        return attention_mask
+            
     
 import torch.nn.functional as F
 def calculate_cosine_similarity(inputs_embeds, all_embeddings, batch_size=24):
@@ -643,6 +703,9 @@ def calculate_cosine_similarity(inputs_embeds, all_embeddings, batch_size=24):
     original_token_ids = torch.arange(V, device=inputs_embeds.device)[~zero_vector_indices]
 
     return cosine_sim, original_token_ids
+
+
+  
 
 import json
 def interpret_top_k_tokens(name, cosine_sim, original_token_ids, processor, k=5):

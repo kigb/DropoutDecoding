@@ -13,7 +13,7 @@ import requests
 from PIL import Image
 from io import BytesIO
 from collections import defaultdict
-from chair_test.chair_metrics import chair
+# from chair_test.chair_metrics import chair
 def load_image(image_file):
     if image_file.startswith('http://') or image_file.startswith('https://'):
         response = requests.get(image_file)
