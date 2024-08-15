@@ -2,14 +2,17 @@ import argparse
 from datetime import datetime
 import json
 import os
+import numpy as np
 from tqdm import tqdm
 from transformers import LlavaNextProcessor
 from models.utils import CustomLlavaNextForConditionalGeneration
 import torch
 from pycocotools.coco import COCO
+from pycocoevalcap.eval import COCOEvalCap
 import requests
 from PIL import Image
 from io import BytesIO
+from collections import defaultdict
 def load_image(image_file):
     if image_file.startswith('http://') or image_file.startswith('https://'):
         response = requests.get(image_file)
@@ -79,7 +82,6 @@ def main(args):
     t = now.strftime("%m%d%H%M")
     filename = args.save_name + t + ".json"
     # ---------end prepare output data dir---------
-
     for idx, img_id in tqdm(enumerate(range(len(img_files))), total=len(img_files)):
         
         img_file = img_files[img_id]
@@ -124,6 +126,73 @@ def main(args):
         with open(generated_captions_path, "a") as f:
             json.dump(img_save, f)
             f.write("\n")
+    
+    # -------- begin json data eval --------
+    loaded_json = []
+
+    generated_captions_path = "/home/fyx/vlm_outputs/"
+    generated_captions_path = generated_captions_path + filename
+    with open(generated_captions_path, "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            loaded_json.append(json.loads(line))
+
+    # eliminate the items in loaded_json with the same key:
+    for i in range(len(loaded_json)):
+        for j in range(i + 1, len(loaded_json)):
+            if loaded_json[i]["image_id"] == loaded_json[j]["image_id"]:
+                loaded_json.pop(j)
+                break
+
+    print("loaded_json:", len(loaded_json))
+
+    # construct output file as input to CHAIR evaluation
+    # output format follows https://github.com/ruotianluo/self-critical.pytorch
+    formulated_output_dict = {}
+    # overall result
+    all_overall_scores = defaultdict(list)
+    # imgToEval per image result
+    img_to_eval_dict = {}
+    # to save memory, load 100 captions at a time
+    for start_idx in tqdm(range(0, len(loaded_json), 100), desc="Generating CHAIR Input"):
+        # define the current iteration end index
+        end_idx = min(start_idx + 100, len(loaded_json))
+        coco_res = coco.loadRes(
+            loaded_json[start_idx:end_idx],
+        )
+        coco_eval = COCOEvalCap(coco, coco_res)
+        coco_eval.params["image_id"] = coco_res.getImgIds()
+        coco_eval.evaluate()
+
+        # keep track of the overall scores
+        for metric, score in coco_eval.eval.items():
+            all_overall_scores[metric].append(score)
+
+        # imgToEval per image result
+        for i, cur_img_id in enumerate(coco_res.getImgIds()):
+            cur_eval_dict = coco_eval.evalImgs[i]
+            # add caption to the eval dict
+            cur_eval_dict["caption"] = coco_res.imgToAnns[cur_img_id][0]["caption"]
+            img_to_eval_dict[cur_img_id] = cur_eval_dict
+
+    # overall result
+    overall_dict = {}
+    for metric, score in all_overall_scores.items():
+        overall_dict[metric] = np.mean(score)
+    formulated_output_dict["overall"] = overall_dict
+    formulated_output_dict["imgToEval"] = img_to_eval_dict
+
+
+    print(f"\nGenerated {len(img_to_eval_dict)} samples results in CHAIR format.")
+
+    # save the formulated output dict
+    formulated_output_path = "/home/fyx/vlm_results/"
+    formulated_output_path = formulated_output_path + args.save_name 
+
+    with open(formulated_output_path, "w") as f:
+        json.dump(formulated_output_dict, f)
+    
+    print("output file saved at: ", formulated_output_path)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
