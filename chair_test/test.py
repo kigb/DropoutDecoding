@@ -13,7 +13,7 @@ import requests
 from PIL import Image
 from io import BytesIO
 from collections import defaultdict
-# from chair_test.chair_metrics import chair
+from chair_test.chair_metrics import chair
 def load_image(image_file):
     if image_file.startswith('http://') or image_file.startswith('https://'):
         response = requests.get(image_file)
@@ -204,7 +204,7 @@ def main(args):
         image = load_image(image_path)
         prompt = "[INST] <image>\nDescribe the image in detail [/INST]"
         inputs = processor(prompt, image, return_tensors="pt").to(device)
-        output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=False)
+        output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=False,num_beams=1)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
         output_text = output_text[0].split('[/INST]', 1)[-1].strip()
         sentence_list = output_text.split(".")
@@ -295,7 +295,7 @@ def main(args):
     print("output file saved at: ", formulated_output_path)
 
     # -------- start chair eval --------
-    data_dir = "vlm_halu/HALC/eval/chair_metrics"
+    data_dir = "/data3/fyx/COCO"
     chair_input_path = formulated_output_path
     method = args.method
     chair_eval(chair_input_path=chair_input_path, model_type="llava",num_images=200,output_dir="./results",dataset_name="coco",data_dir=data_dir,metric=method,verbosity=True)

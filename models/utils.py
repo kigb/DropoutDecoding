@@ -484,7 +484,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         if self.is_first_generation:
             # 第一次生成，需要记录image feature
             self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
-        if not self.is_first_generation:
+        if not self.is_first_generation and False:
             # 用处理后后的attention_mask进行生成
             attention_mask = self.get_image_attention_mask(logits, attention_mask)
             outputs_1 = self.language_model(
