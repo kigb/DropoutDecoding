@@ -38,14 +38,6 @@ def chair_eval(chair_input_path, model_type,num_images,output_dir,dataset_name,d
 
     # sanity check between caption file and command line arguments
     model_name = "llava"
-    
-    # dataset_name_identified = chair_input_path.split("/")[-1].split("_")[-4]
-
-    # if dataset_name_identified != dataset_name:
-    #     raise Exception(
-    #         f"Dataset name in caption file {dataset_name_identified} does not match command line argument {dataset_name}."
-    #     )
-    # update output dir
     output_dir = os.path.join(
         output_dir, metric, f"{model_name}_{model_type}", dataset_name
     )
@@ -148,7 +140,7 @@ def main(args):
     num_samples = 200 # number of samples
     step = 100 # step size, sample every step images
     num_samples = min(num_samples, len(img_ids) // step)
-    sampled_indices = [i for i in range(0, len(img_ids), step)]
+    sampled_indices = [i for i in range(args.start_step, len(img_ids), step)]
     sampled_indices = sampled_indices[:num_samples]
     sampled_img_ids = [img_ids[i] for i in sampled_indices]
     img_files = []
@@ -193,11 +185,11 @@ def main(args):
         img_save = {}
         img_save["image_id"] = img_id
         
-        with open("/home/fyx/llava_masked_tokens.txt", "a") as f:
-            # write the img_file to the file
-            f.write(img_file)
-            f.write("\n")
-        f.close()
+        # with open("/home/fyx/llava_masked_tokens.txt", "a") as f:
+        #     # write the img_file to the file
+        #     f.write(img_file)
+        #     f.write("\n")
+        # f.close()
 
         # begin process input data
         image_path = "/data3/fyx/COCO/val2014/" + img_file
@@ -304,5 +296,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-name",type=str, default="output")
     parser.add_argument("--method", type=str, default="None")
+    parser.add_argument("--start-step", type=int, default=0)
     args = parser.parse_args()
     main(args)

@@ -25,6 +25,11 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         self.end_image_pos = [] # 用于记录图片结束位置
         self.is_first_generation = False # 用于记录是否是第一次生成
         self.image_features = None # 用于记录图片特征
+        self.logits_mask_prob = [] # 用于text部分mask的概率
+        self.all_outputs = [] # 用于记录所有输出，用于case study
+        self.processor = LlavaNextProcessor.from_pretrained("/data3/fyx/llava-v1.6-mistral-7b-hf")
+        self.do_step = True # 用于控制是否进行step操作
+        self.skip_steps = 0 # 用于控制跳过的step数
 
     def _merge_input_ids_with_image_features(
         self,
@@ -337,6 +342,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         )
         if input_ids.shape[-1]!=1:
             self.is_first_generation = True
+            self.logits_mask_prob = [] # restore logits mask prob
         else:
             self.is_first_generation = False
         if inputs_embeds is None:
@@ -453,23 +459,20 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         # 假设默认为use cache，这样不需要在generate函数中传入start_generation_pos
         # 暂时假设不是batch generation，后续直接修改即可
         if self.is_first_generation:
-            start_generation_pos = attention_mask.shape[-1] # 开始生成的位置
-
-        def custom_attention_mask(attention_mask, random_prob=0.1):
-            # 生成随机的attention_mask，设置第二个维度从start_generation_pos开始的位置到末尾以random_prob为概率进行mask
-            random_mask = torch.rand(attention_mask.shape[-1] - start_generation_pos).to(attention_mask.device) < random_prob
-            attention_mask[:, self.start_generation_pos:] = random_mask
-            return attention_mask
-
+            self.start_generation_pos = attention_mask.shape[-1] # 开始生成的位置
         
         def restore_attention_mask(attention_mask):
             attention_mask[:, self.start_generation_pos:] = 1
             return attention_mask
         
         # kv会改变，需要深拷贝来进行储存
+        dangerous_text_part = False
         original_past_key_values = copy.deepcopy(past_key_values)
+        original_past_key_values1 = copy.deepcopy(past_key_values)
+        original_past_key_values2 = copy.deepcopy(past_key_values)
+        original_past_key_values_case = copy.deepcopy(past_key_values)
         output_hidden_states = True
-       
+        outputs_all = []
         outputs = self.language_model(
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -480,11 +483,28 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        outputs_all.append(outputs)
         logits = outputs['logits']
         if self.is_first_generation:
             # 第一次生成，需要记录image feature
             self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
-        if not self.is_first_generation and False:
+        if not self.is_first_generation:
+            attention_mask = self.get_image_attention_mask(logits, attention_mask, method="all_image")
+            outputs_noimg = self.language_model(
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=original_past_key_values1,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            logits_noimg = outputs_noimg[0]
+            attention_mask = restore_attention_mask(attention_mask)
+            # 判断logits_noimg中最大的id是否与原来的生成相同
+            if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
+                dangerous_text_part = True
             # 用处理后后的attention_mask进行生成
             attention_mask = self.get_image_attention_mask(logits, attention_mask)
             outputs_1 = self.language_model(
@@ -499,11 +519,35 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             )
             logits_1 = outputs_1[0]
             attention_mask = restore_attention_mask(attention_mask)
+            outputs_all.append(outputs_1)
+            outputs_r = None
+            if dangerous_text_part:
+                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
+                outputs_logits = self.language_model(
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=original_past_key_values2,
+                    inputs_embeds=inputs_embeds,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                )
+                outputs_all.append(outputs_logits)
+
             loss = None
+            # find the max logit in outputs_all and choose it
+            cur_maxlogit = -1000
+            for i in outputs_all:
+                if torch.max(i[0][-1]) > cur_maxlogit:
+                    cur_maxlogit = torch.max(i[0][-1])
+                    outputs_r = i
+
+            self.logits_mask_prob.append(1/torch.max(outputs_r[0][-1]).item())
             return LlavaNextCausalLMOutputWithPast(
                 loss=loss,
-                logits=logits_1,
-                past_key_values=outputs_1.past_key_values,
+                logits=outputs_r[0],
+                past_key_values=outputs_r.past_key_values,
                 hidden_states=outputs.hidden_states,
                 attentions=outputs.attentions,
             )
@@ -530,6 +574,42 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
+        self.logits_mask_prob.append(1/torch.max(logits[-1][-1]).item())
+        
+        # ------------- begin manual mask --------------- #ß
+        if self.do_step and self.skip_steps == 0 and False:
+            mem_original_past_key_values_case = copy.deepcopy(original_past_key_values_case)
+            while True:
+                print("current generate token: \"", self.processor.decode(torch.argmax(logits[-1][-1]).item()), "\"", "logit value:", torch.max(logits[-1]).item())
+                for i in range(len(self.all_outputs)):
+                    print(self.all_outputs[i][1], "(", self.all_outputs[i][0], i, ")", end=" ")
+                print()
+                mask_arrary = self.get_input(len(self.all_outputs)-1)
+                if len(mask_arrary) == 0:
+                    
+                    break
+                for i in range(len(mask_arrary)):
+                    attention_mask[:, mask_arrary[i] + self.start_generation_pos] = 0
+                
+                original_past_key_values_case = copy.deepcopy(mem_original_past_key_values_case)
+                outputs = self.language_model(
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=original_past_key_values_case,
+                    inputs_embeds=inputs_embeds,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                )
+                logits = outputs['logits']
+                attention_mask = restore_attention_mask(attention_mask)
+        if self.skip_steps > 0:
+            self.skip_steps -= 1
+                
+        self.all_outputs.append((torch.max(logits[-1][-1]).item(), self.processor.decode(torch.argmax(logits[-1][-1]).item(), skip_special_tokens=False)))
+        # ------------- end manual mask --------------- #
+        
         
         return LlavaNextCausalLMOutputWithPast(
             loss=loss,
@@ -592,7 +672,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         image_features = (values, ids)
         return image_features
     
-    def get_overlap_image_tokens(self,logits,topk=5):
+    def get_overlap_image_tokens(self,logits,topk=10):
         """
         get overlap image tokens
 
@@ -654,7 +734,61 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 return attention_mask
             # 更新 attention_mask，设定这些位置的值为 0
             attention_mask[:, adjusted_indices_tensor] = 0
+        elif method == "all_image":
+            attention_mask[:, self.start_image_pos[0]:self.end_image_pos[0]+1] = 0
+        elif method == "logits":
+            # mask based on self.logits_mask_prob
+            for i in range(len(self.logits_mask_prob)):
+                # create a random number between 0 and 1
+                if i + self.start_generation_pos >= attention_mask.shape[-1]:
+                    break
+                random_num = torch.rand(1)
+                if random_num  < self.logits_mask_prob[i]:
+                    attention_mask[:, i + self.start_generation_pos] = 0
+
         return attention_mask
+    
+    def get_input(self, max_length):
+        """
+        Get input, input a list of int values between 0 and max_length, if the input is -1, then return the collected list.
+
+        Args:
+            max_length: max length
+
+        Returns:
+            array of int values
+        """
+        result = []
+
+        while True:
+            try:
+                # 获取用户输入
+                value = int(input(f"Enter an integer between 0 and {max_length} (or -1 to finish, -2 to skip all, -3 to input the skip step size, -4 for continuous mask): "))
+                
+                # 如果输入为 -1，则返回当前收集到的 result 列表
+                if value == -1:
+                    return result
+                if value == -2:
+                    self.do_step = False
+                    return []
+                if value == -3:
+                    self.skip_steps = int(input("Enter the step size: "))
+                    return []
+                if value == -4:
+                    start = int(input("Enter the start position: "))
+                    end = int(input("Enter the end position: "))
+                    for i in range(start, end+1):
+                        result.append(i)
+                    return result
+                # 检查输入是否在有效范围内
+                if 0 <= value <= max_length:
+                    result.append(value)
+                else:
+                    print(f"Please enter a number between 0 and {max_length}.")
+            
+            except ValueError:
+                print("Invalid input. Please enter an integer.")
+        
             
     
 import torch.nn.functional as F
@@ -854,21 +988,21 @@ def saveimg(image, variable_name):
 #     )
 #     use_input_embeddings = False
 
-    for index in range(1):
-        img_path = f"/home/fyx/vlm_images/COCO_val2014_000000012443.jpg"
-        image = Image.open(img_path)
-        prompt = "[INST] <image>\nWhat is shown in this image? [/INST]"
+    # for index in range(1):
+    #     img_path = f"/home/fyx/vlm_images/COCO_val2014_000000012443.jpg"
+    #     image = Image.open(img_path)
+    #     prompt = "[INST] <image>\nWhat is shown in this image? [/INST]"
 
-        # ------------------------------------
-        globals()['processor'] = processor
-        inputs = processor(prompt, image, return_tensors="pt").to(device)
-        # try:
-        #     early_exit_output = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=use_input_embeddings)
-        # except EarlyExitException as e:
-        #     early_exit_output = e.early_exit_output
-        output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=use_input_embeddings)
-        output = processor.batch_decode(output_ids, skip_special_tokens=True)
-        # ------------------------------------
+    #     # ------------------------------------
+    #     globals()['processor'] = processor
+    #     inputs = processor(prompt, image, return_tensors="pt").to(device)
+    #     # try:
+    #     #     early_exit_output = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=use_input_embeddings)
+    #     # except EarlyExitException as e:
+    #     #     early_exit_output = e.early_exit_output
+    #     output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=use_input_embeddings)
+    #     output = processor.batch_decode(output_ids, skip_special_tokens=True)
+    #     # ------------------------------------
 
         
         
