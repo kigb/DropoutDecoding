@@ -126,7 +126,7 @@ def main(args):
     # load model
     model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
     processor = LlavaNextProcessor.from_pretrained(model_path)
-    device = 'cuda:3'
+    device = 'cuda:0'
     model = CustomLlavaNextForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.float16, 

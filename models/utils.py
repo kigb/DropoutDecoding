@@ -460,6 +460,8 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         # 暂时假设不是batch generation，后续直接修改即可
         if self.is_first_generation:
             self.start_generation_pos = attention_mask.shape[-1] # 开始生成的位置
+            self.do_step = True
+            self.all_outputs = []
         
         def restore_attention_mask(attention_mask):
             attention_mask[:, self.start_generation_pos:] = 1
@@ -473,6 +475,8 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         original_past_key_values_case = copy.deepcopy(past_key_values)
         output_hidden_states = True
         outputs_all = []
+        if False:
+            attention_mask = self.get_image_attention_mask(None, attention_mask, method="agressive")
         outputs = self.language_model(
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -483,11 +487,13 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        attention_mask = restore_attention_mask(attention_mask)
         outputs_all.append(outputs)
         logits = outputs['logits']
         if self.is_first_generation:
             # 第一次生成，需要记录image feature
             self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
+        
         if not self.is_first_generation:
             attention_mask = self.get_image_attention_mask(logits, attention_mask, method="all_image")
             outputs_noimg = self.language_model(
@@ -506,7 +512,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
                 dangerous_text_part = True
             # 用处理后后的attention_mask进行生成
-            attention_mask = self.get_image_attention_mask(logits, attention_mask)
+            attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap")
             outputs_1 = self.language_model(
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -521,7 +527,8 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             attention_mask = restore_attention_mask(attention_mask)
             outputs_all.append(outputs_1)
             outputs_r = None
-            if dangerous_text_part:
+            # logits mask
+            if dangerous_text_part and None:
                 attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
                 outputs_logits = self.language_model(
                     attention_mask=attention_mask,
@@ -577,7 +584,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         self.logits_mask_prob.append(1/torch.max(logits[-1][-1]).item())
         
         # ------------- begin manual mask --------------- #ß
-        if self.do_step and self.skip_steps == 0 and False:
+        if self.do_step and self.skip_steps == 0 and None:
             mem_original_past_key_values_case = copy.deepcopy(original_past_key_values_case)
             while True:
                 print("current generate token: \"", self.processor.decode(torch.argmax(logits[-1][-1]).item()), "\"", "logit value:", torch.max(logits[-1]).item())
@@ -685,26 +692,27 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         """
         max_ids = torch.argmax(logits, dim=-1)  # [batch_size, sequence_length]
 
-        # 假设 image_features 的形状为 [batch_size, 1948, 5]，取出存储的 top 5 ids
+        
         top5_ids = self.image_features[1]  # [batch_size, 1948, 5]
+        # 假设 logits 是 [batch_size, sequence_length] 的张量
+        # 假设 top5_ids 是 [batch_size, 1948, 5] 的张量
 
-        # 在第二维度(1948)进行广播比较
-        # 扩展 max_ids 的维度为 [batch_size, sequence_length, 1]
-        # top5_ids 的维度为 [batch_size, 1948, 5]
-        # 进行广播比较得到匹配的布尔矩阵 match, 形状为 [batch_size, sequence_length, 1948, 5]
-        match = torch.isin(max_ids.unsqueeze(-1).unsqueeze(-1), top5_ids)
+        # 获取 max_ids, 形状为 [batch_size, sequence_length]
+        max_ids = torch.argmax(logits, dim=-1)
 
-        # 对 match 进行任何一个维度上的 "或" 操作，得到 [batch_size, sequence_length, 1948] 的布尔矩阵
-        match_any = match.any(dim=-1)
+        # 获取第一个样本的 max_ids 和 top5_ids
+        max_ids_sample = max_ids[0]  # 形状为 [sequence_length]
+        top5_ids_sample = top5_ids[0]  # 形状为 [1948, 5]
 
-        # 如果希望在所有 sequence_length 中都匹配到某个 1948 的位置，可以对 sequence_length 维度再进行 "或" 操作
-        # 得到 [batch_size, 1948] 的布尔矩阵
-        matched_indices = match_any.any(dim=1)
+        # 比较 top5_ids_sample 中每一行是否包含 max_ids_sample
+        matches = (top5_ids_sample == max_ids_sample)  # 形状为 [3, 5]
 
-        # 提取出匹配到的索引
-        matched_indices = matched_indices.nonzero(as_tuple=True)[1]  # 提取 1948 维度上的索引
+        # 在每一行的维度上进行 logical OR 操作，如果某行包含 max_ids_sample，那么该行的结果为 True
+        matched_rows = matches.any(dim=1)  # 形状为 [3]
 
-        # 如果需要将这些匹配到的索引加上 self.start_image_pos[0] 的偏移量
+        # 找到 matched_rows 中为 True 的行的索引
+        matched_indices = torch.nonzero(matched_rows).squeeze()
+
         offset = self.start_image_pos[0]
         adjusted_indices = matched_indices + offset
 
@@ -724,16 +732,21 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         """
         if method == "overlap":
             matched_indices = self.get_overlap_image_tokens(logits)
-            # 假设 self.start_image_pos[0] 是一个整数，表示偏移量
-            offset = self.start_image_pos[0]
-
-            # 将偏移量加到 matched_indices 上
-            adjusted_indices = [index + offset for index in matched_indices]
-            adjusted_indices_tensor = torch.tensor(adjusted_indices)
-            if adjusted_indices_tensor.shape[0] == 0:
-                return attention_mask
+            adjusted_indices_tensor = torch.tensor(matched_indices)
             # 更新 attention_mask，设定这些位置的值为 0
             attention_mask[:, adjusted_indices_tensor] = 0
+        elif method == "keep_overlap":
+            matched_indices = self.get_overlap_image_tokens(logits)
+            adjusted_indices_tensor = torch.tensor(matched_indices)
+            for i in range(self.start_image_pos[0], self.end_image_pos[0]+1):
+                if i >= attention_mask.shape[-1]:
+                    break
+                random_num = torch.rand(1)
+                if random_num < 1/(self.image_features[0][0][i-self.start_image_pos[0]][0].item()):
+                    attention_mask[:, i] = 0
+            if adjusted_indices_tensor.shape == 0:
+                return attention_mask
+            attention_mask[:, adjusted_indices_tensor] = 1
         elif method == "all_image":
             attention_mask[:, self.start_image_pos[0]:self.end_image_pos[0]+1] = 0
         elif method == "logits":
@@ -745,6 +758,14 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 random_num = torch.rand(1)
                 if random_num  < self.logits_mask_prob[i]:
                     attention_mask[:, i + self.start_generation_pos] = 0
+        elif method == "agressive":
+            # agressively mask image token at a prob
+            for i in range(self.start_image_pos[0], self.end_image_pos[0]+1):
+                if i >= attention_mask.shape[-1]:
+                    break
+                random_num = torch.rand(1)
+                if random_num < 0.2:
+                    attention_mask[:, i] = 0
 
         return attention_mask
     

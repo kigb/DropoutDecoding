@@ -13,12 +13,19 @@ def main(args):
         device_map = device
     )
     image = Image.open(args.img_path)
-    prompt = "[INST] <image>\nDescribe the image [/INST]"
-    inputs = processor(prompt, image, return_tensors="pt").to(device)
-    output_ids = model.generate(**inputs, max_new_tokens=150, use_input_embeddings=False,num_beams=1)
-    output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
-    output_text = output_text[0].split('[/INST]', 1)[-1].strip()
-    print(output_text)
+    while True:
+        img_path = input("Please input the image path, press Enter to continue.")
+        if img_path != "":
+            image = Image.open("/home/fyx/vlm_images/" + img_path)
+        prompt = "[INST] <image>\nDescribe the image [/INST]"
+        inputs = processor(prompt, image, return_tensors="pt").to(device)
+        output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=False,num_beams=1)
+        output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
+        output_text = output_text[0].split('[/INST]', 1)[-1].strip()
+        print(output_text)
+        input("Want to generate again? Press Enter to continue, Ctrl+C to exit.")
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
