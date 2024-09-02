@@ -2,6 +2,7 @@ import argparse
 from datetime import datetime
 import json
 import os
+from random import sample, seed
 import numpy as np
 from tqdm import tqdm
 from transformers import LlavaNextProcessor
@@ -126,7 +127,7 @@ def main(args):
     # load model
     model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
     processor = LlavaNextProcessor.from_pretrained(model_path)
-    device = 'cuda:0'
+    device = 'cuda:1'
     model = CustomLlavaNextForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.float16, 
@@ -137,16 +138,32 @@ def main(args):
     coco, coco_anns = load_coco_data("/data3/fyx/COCO/")
     img_ids = coco.getImgIds()
     # ---------begin prepare sample dataset---------
-    num_samples = 200 # number of samples
-    step = 100 # step size, sample every step images
-    num_samples = min(num_samples, len(img_ids) // step)
-    sampled_indices = [i for i in range(args.start_step, len(img_ids), step)]
-    sampled_indices = sampled_indices[:num_samples]
-    sampled_img_ids = [img_ids[i] for i in sampled_indices]
+    # Assuming coco and coco_anns are already loaded as in your original script
+    img_ids = coco.getImgIds()
+    sampled_img_ids = None
+    if args.use_prev_sample is not None:
+        # Load sampled IDs from sample.log
+        with open('sample.log', 'r') as f:
+            sampled_img_ids = [int(line.strip()) for line in f.readlines()]
+
+        print(f"Loaded {len(sampled_img_ids)} image IDs from sample.log")
+    else :
+        # Number of samples
+        num_samples = 500
+        if args.seed is not None:
+            seed(args.seed)
+        # Randomly sample 500 unique image IDs
+        sampled_img_ids = sample(img_ids, num_samples)
+
+        # Write sampled IDs to a log file
+        with open('sample.log', 'w') as f:
+            for img_id in sampled_img_ids:
+                f.write(f"{img_id}\n")
+
+        print(f"Sampled {num_samples} image IDs and saved them to sample.log")
     img_files = []
     for cur_img_id in sampled_img_ids:
         cur_img = coco.loadImgs(cur_img_id)[0]
-        print(cur_img)
         cur_img_path = cur_img["file_name"]
         img_files.append(cur_img_path)
     img_dict = {}
@@ -194,9 +211,9 @@ def main(args):
         # begin process input data
         image_path = "/data3/fyx/COCO/val2014/" + img_file
         image = load_image(image_path)
-        prompt = "[INST] <image>\nDescribe the image in detail [/INST]"
+        prompt = "[INST] <image>\nDescribe the image [/INST]"
         inputs = processor(prompt, image, return_tensors="pt").to(device)
-        output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=False,num_beams=1)
+        output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
         output_text = output_text[0].split('[/INST]', 1)[-1].strip()
         sentence_list = output_text.split(".")
@@ -205,10 +222,10 @@ def main(args):
             if "unk" not in sentence:
                 sentence_filter_list.append(sentence)
         output_text = ".".join(sentence_filter_list)
-        print("decoder output text", output_text)
+        # print("decoder output text", output_text)
         img_save["caption"] = output_text
-        print("image_path: ", image_path)
-        print("caption: ", output_text)
+        # print("image_path: ", image_path)
+        # print("caption: ", output_text)
         #获取时间
         
         generated_captions_path = os.path.join(
@@ -236,7 +253,7 @@ def main(args):
                 loaded_json.pop(j)
                 break
 
-    print("loaded_json:", len(loaded_json))
+    # print("loaded_json:", len(loaded_json))
 
     # construct output file as input to CHAIR evaluation
     # output format follows https://github.com/ruotianluo/self-critical.pytorch
@@ -297,5 +314,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-name",type=str, default="output")
     parser.add_argument("--method", type=str, default="None")
     parser.add_argument("--start-step", type=int, default=0)
+    parser.add_argument("--use-prev-sample", type=str, default=None)
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
     main(args)

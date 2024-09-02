@@ -343,6 +343,8 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         if input_ids.shape[-1]!=1:
             self.is_first_generation = True
             self.logits_mask_prob = [] # restore logits mask prob
+            self.start_image_pos = [] # restore start image pos
+            self.end_image_pos = [] # restore end image pos
         else:
             self.is_first_generation = False
         if inputs_embeds is None:
@@ -411,7 +413,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                     end_image_pos=self.end_image_pos,
                 )
 
-                print(f"dont use early stop exit on input embeddings")
+                # print(f"dont use early stop exit on input embeddings")
                 
                 if use_input_embeddings:
                     print("Exiting early from generate()")
@@ -493,6 +495,9 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         if self.is_first_generation:
             # 第一次生成，需要记录image feature
             self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
+            # write decoded image_features[1] to a file
+            # with open("image_features.json", "w") as f:
+            #     json.dump(self.processor.batch_decode(self.image_features[1][0]), f)
         
         if not self.is_first_generation:
             attention_mask = self.get_image_attention_mask(logits, attention_mask, method="all_image")
@@ -512,23 +517,23 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
                 dangerous_text_part = True
             # 用处理后后的attention_mask进行生成
-            attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap")
-            outputs_1 = self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            logits_1 = outputs_1[0]
-            attention_mask = restore_attention_mask(attention_mask)
-            outputs_all.append(outputs_1)
-            outputs_r = None
-            # logits mask
-            if dangerous_text_part and None:
+
+            # image and logits mask
+            if dangerous_text_part:
+                attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap")
+                # outputs_1 = self.language_model(
+                #     attention_mask=attention_mask,
+                #     position_ids=position_ids,
+                #     past_key_values=original_past_key_values,
+                #     inputs_embeds=inputs_embeds,
+                #     use_cache=use_cache,
+                #     output_attentions=output_attentions,
+                #     output_hidden_states=output_hidden_states,
+                #     return_dict=return_dict,
+                # )
+                # # 尝试保留attention_mask
+                # # attention_mask = restore_attention_mask(attention_mask)
+                # outputs_all.append(outputs_1)
                 attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
                 outputs_logits = self.language_model(
                     attention_mask=attention_mask,
@@ -544,19 +549,30 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
 
             loss = None
             # find the max logit in outputs_all and choose it
-            cur_maxlogit = -1000
-            for i in outputs_all:
-                if torch.max(i[0][-1]) > cur_maxlogit:
-                    cur_maxlogit = torch.max(i[0][-1])
-                    outputs_r = i
+            # choose the sharpest logit distribution 
+            if True:
+                cur_maxlogit = -100
+                for i in outputs_all:
+                    if torch.max(i[0][-1]) > cur_maxlogit:
+                        cur_maxlogit = torch.max(i[0][-1])
+                        outputs_r = i
+            else:
+                cur_sharpness = float('inf')
+                for i in outputs_all:
+                    # 计算当前分布的标准差
+                    std_dev = torch.std(i[0][-1])
+                    # 比较分布的尖锐程度，选择最sharp的分布（标准差最小）
+                    if std_dev < cur_sharpness:
+                        cur_sharpness = std_dev
+                        outputs_r = i
 
             self.logits_mask_prob.append(1/torch.max(outputs_r[0][-1]).item())
             return LlavaNextCausalLMOutputWithPast(
                 loss=loss,
                 logits=outputs_r[0],
                 past_key_values=outputs_r.past_key_values,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions,
+                hidden_states=outputs_r.hidden_states,
+                attentions=outputs_r.attentions,
             )
 
         # raise EarlyExitException("Early exit triggered", outputs)
@@ -595,8 +611,11 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 if len(mask_arrary) == 0:
                     
                     break
-                for i in range(len(mask_arrary)):
-                    attention_mask[:, mask_arrary[i] + self.start_generation_pos] = 0
+                if mask_arrary[0] == -1:
+                    attention_mask[0, self.start_image_pos[0]:self.end_image_pos[0]+1] = 0
+                else :
+                    for i in range(len(mask_arrary)):
+                        attention_mask[:, mask_arrary[i] + self.start_generation_pos] = 0
                 
                 original_past_key_values_case = copy.deepcopy(mem_original_past_key_values_case)
                 outputs = self.language_model(
@@ -674,8 +693,9 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         if len(start_image_pos)==0 or len(end_image_pos)==0:
             return None
         logits = outputs['logits']
+        # print(start_image_pos, end_image_pos)
         image_logits = self.get_image_logits(logits=logits, start_image_pos=start_image_pos[0], end_image_pos=end_image_pos[0])
-        values, ids = self.get_topk_token_id(image_logits)
+        values, ids = self.get_topk_token_id(image_logits, topk=3)
         image_features = (values, ids)
         return image_features
     
@@ -686,6 +706,8 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         Args:
             logits: model outputs['logits']
             topk: topk k
+            image token project topk tokens -> generation token overlap, if one image token
+            has overlap with generation token, then keep it
 
         Returns:
             overlap_image_tokens: overlap image tokens
@@ -784,7 +806,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         while True:
             try:
                 # 获取用户输入
-                value = int(input(f"Enter an integer between 0 and {max_length} (or -1 to finish, -2 to skip all, -3 to input the skip step size, -4 for continuous mask): "))
+                value = int(input(f"Enter an integer between 0 and {max_length} (or -1 to finish, -2 to skip all, -3 to input the skip step size, -4 for continuous mask, -5 for all image mask): "))
                 
                 # 如果输入为 -1，则返回当前收集到的 result 列表
                 if value == -1:
@@ -800,6 +822,9 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                     end = int(input("Enter the end position: "))
                     for i in range(start, end+1):
                         result.append(i)
+                    return result
+                if value == -5:
+                    result.append(-1)
                     return result
                 # 检查输入是否在有效范围内
                 if 0 <= value <= max_length:
