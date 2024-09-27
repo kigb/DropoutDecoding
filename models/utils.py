@@ -9,6 +9,35 @@ import numpy as np
 from typing import List, Optional, Tuple, Union
 import json
 import copy
+from collections import Counter
+
+def argmax(output):
+    return torch.argmax(output).item()
+
+def select_by_vote(outputs_all):
+    id_counter = Counter()  # 用来统计每个token id出现的次数
+    
+    # 统计每个输出中最后一个token的id
+    for output in outputs_all:
+        token_id = argmax(output[0][-1])  # 获取每个output中最后一个token的id
+        id_counter[token_id] += 1  # 统计该id出现次数
+    
+    # 找到出现次数最多的id
+    most_common_id = id_counter.most_common(1)[0][0]  # 取出现次数最多的id
+    
+    # 返回outputs_all中第一个包含这个id的output
+
+    # # 遍历所有输出，打印分歧情况
+    # for output in outputs_all:
+    #     current_id = argmax(output[0][-1])
+    #     if current_id != most_common_id:
+    #         print(f"Discrepancy found: current_id={current_id}, most_common_id={most_common_id}")
+
+    for output in outputs_all:
+        if argmax(output[0][-1]) == most_common_id:
+            return output
+    
+    return None  # 如果没有找到，返回None
 
 
 class EarlyExitException(Exception):
@@ -30,6 +59,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         self.processor = LlavaNextProcessor.from_pretrained("/data3/fyx/llava-v1.6-mistral-7b-hf")
         self.do_step = True # 用于控制是否进行step操作
         self.skip_steps = 0 # 用于控制跳过的step数
+        self.int_array = []
 
     def _merge_input_ids_with_image_features(
         self,
@@ -493,15 +523,29 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         outputs_all.append(outputs)
         logits = outputs['logits']
         if self.is_first_generation:
+            self.int_array = []
             # 第一次生成，需要记录image feature
             self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
             # write decoded image_features[1] to a file
-            # with open("image_features.json", "w") as f:
-            #     json.dump(self.processor.batch_decode(self.image_features[1][0]), f)
-        
-        if not self.is_first_generation:
-            attention_mask = self.get_image_attention_mask(logits, attention_mask, method="all_image")
-            outputs_noimg = self.language_model(
+            with open("image_features.json", "w") as f:
+                json.dump(self.processor.batch_decode(self.image_features[1][0]), f)
+        max_vote = True
+        VQA = True
+        if VQA:
+            # outputs_all = [] # refresh outputs_all
+            data = input_ids[0]
+            indices_32000 = (data == 736).nonzero(as_tuple=True)[0]
+            if indices_32000.numel() > 0:
+                # 获取第一个出现的 32000 的位置
+                index_32000 = indices_32000[0].item()
+
+                # 提取 32000 之后的所有元素
+                elements_after_32000 = data[index_32000 + 1:]
+
+                # 将提取的元素转换为 CPU 上的 numpy 数组（如果需要在 CPU 上处理）
+                self.int_array = elements_after_32000.cpu().numpy()
+            attention_mask = self.get_image_attention_mask(logits,attention_mask,"random_image",0.7,[self.int_array[1]])
+            outputs_r = self.language_model(
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_values=original_past_key_values1,
@@ -511,13 +555,79 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
-            logits_noimg = outputs_noimg[0]
             attention_mask = restore_attention_mask(attention_mask)
-            # 判断logits_noimg中最大的id是否与原来的生成相同
-            if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
-                dangerous_text_part = True
-            # 用处理后后的attention_mask进行生成
+            outputs_all.append(outputs_r)
+            attention_mask = self.get_image_attention_mask(logits,attention_mask,"random_image",0.5,[self.int_array[1]])
+            outputs_r1 = self.language_model(
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=original_past_key_values2,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            outputs_all.append(outputs_r1)
+            attention_mask = restore_attention_mask(attention_mask)
+            attention_mask = self.get_image_attention_mask(logits,attention_mask,"random_image",0.3,[self.int_array[1]])
+            outputs_r2 = self.language_model(
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=original_past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            outputs_all.append(outputs_r2)
+            outputs_r = select_by_vote(outputs_all)
+            loss = None
+            return LlavaNextCausalLMOutputWithPast(
+                loss=loss,
+                logits=outputs_r[0],
+                past_key_values=outputs_r.past_key_values,
+                hidden_states=outputs_r.hidden_states,
+                attentions=outputs_r.attentions,
+            )
 
+
+        if not self.is_first_generation:
+            # outputs_all = [] # refresh outputs_all
+            # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="all_image")
+            # outputs_noimg = self.language_model(
+            #     attention_mask=attention_mask,
+            #     position_ids=position_ids,
+            #     past_key_values=original_past_key_values1,
+            #     inputs_embeds=inputs_embeds,
+            #     use_cache=use_cache,
+            #     output_attentions=output_attentions,
+            #     output_hidden_states=output_hidden_states,
+            #     return_dict=return_dict,
+            # )
+            # logits_noimg = outputs_noimg[0]
+            attention_mask = restore_attention_mask(attention_mask)
+            # # 判断logits_noimg中最大的id是否与原来的生成相同
+            # if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
+            #     dangerous_text_part = True
+            # # 用处理后后的attention_mask进行生成
+            log_file = './case_study/results/0906.log'
+
+            # 假设self.processor.decode()会将传入的参数解码成相应的文本
+            # logits_noimg 和 logits 是你的 logits 张量
+
+            # if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
+            #     dangerous_text_part = True
+            dangerous_text_part = True
+            #     decoded_text = self.processor.decode(torch.argmax(logits[-1]))
+            #     with open(log_file, 'a') as f:  # 'a'模式表示追加写入
+            #         f.write(f"{decoded_text} ")
+            # else:
+            #     decoded_logits = self.processor.decode(torch.argmax(logits[-1]))
+            #     decoded_logits_noimg = self.processor.decode(torch.argmax(logits_noimg[-1]))
+            #     with open(log_file, 'a') as f:  # 'a'模式表示追加写入
+            #         f.write(f"{decoded_logits}({decoded_logits_noimg}) ")
             # image and logits mask
             if dangerous_text_part:
                 attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap")
@@ -534,7 +644,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 # # 尝试保留attention_mask
                 # # attention_mask = restore_attention_mask(attention_mask)
                 # outputs_all.append(outputs_1)
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
+                # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
                 outputs_logits = self.language_model(
                     attention_mask=attention_mask,
                     position_ids=position_ids,
@@ -546,17 +656,51 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                     return_dict=return_dict,
                 )
                 outputs_all.append(outputs_logits)
+                
+                if max_vote:
+                    attention_mask = restore_attention_mask(attention_mask)
+                    attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap", prob=0.3)
+                    # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
+                    outputs_all.append(
+                        self.language_model(
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            past_key_values=original_past_key_values,
+                            inputs_embeds=inputs_embeds,
+                            use_cache=use_cache,
+                            output_attentions=output_attentions,
+                            output_hidden_states=output_hidden_states,
+                            return_dict=return_dict,
+                        )
+                    )
+                    attention_mask = restore_attention_mask(attention_mask)
+                    attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap", prob=0.7)
+                    # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
+                    outputs_all.append(
+                        self.language_model(
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            past_key_values=original_past_key_values1,
+                            inputs_embeds=inputs_embeds,
+                            use_cache=use_cache,
+                            output_attentions=output_attentions,
+                            output_hidden_states=output_hidden_states,
+                            return_dict=return_dict,
+                        )
+                    )
+
+
 
             loss = None
             # find the max logit in outputs_all and choose it
             # choose the sharpest logit distribution 
-            if True:
+            if not max_vote:
                 cur_maxlogit = -100
                 for i in outputs_all:
                     if torch.max(i[0][-1]) > cur_maxlogit:
                         cur_maxlogit = torch.max(i[0][-1])
                         outputs_r = i
-            else:
+            elif None:
                 cur_sharpness = float('inf')
                 for i in outputs_all:
                     # 计算当前分布的标准差
@@ -565,14 +709,16 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                     if std_dev < cur_sharpness:
                         cur_sharpness = std_dev
                         outputs_r = i
+            if max_vote:
+                outputs_r = select_by_vote(outputs_all)     
 
             self.logits_mask_prob.append(1/torch.max(outputs_r[0][-1]).item())
             return LlavaNextCausalLMOutputWithPast(
                 loss=loss,
                 logits=outputs_r[0],
                 past_key_values=outputs_r.past_key_values,
-                hidden_states=outputs_r.hidden_states,
-                attentions=outputs_r.attentions,
+                hidden_states=outputs.hidden_states,
+                attentions=outputs.attentions,
             )
 
         # raise EarlyExitException("Early exit triggered", outputs)
@@ -695,32 +841,32 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         logits = outputs['logits']
         # print(start_image_pos, end_image_pos)
         image_logits = self.get_image_logits(logits=logits, start_image_pos=start_image_pos[0], end_image_pos=end_image_pos[0])
-        values, ids = self.get_topk_token_id(image_logits, topk=3)
+        values, ids = self.get_topk_token_id(image_logits, topk=5)
         image_features = (values, ids)
         return image_features
     
-    def get_overlap_image_tokens(self,logits,topk=10):
+    def get_overlap_image_tokens(self,logits,id = -1):
         """
         get overlap image tokens
 
         Args:
             logits: model outputs['logits']
-            topk: topk k
+            id: max token id
             image token project topk tokens -> generation token overlap, if one image token
             has overlap with generation token, then keep it
 
         Returns:
             overlap_image_tokens: overlap image tokens
         """
-        max_ids = torch.argmax(logits, dim=-1)  # [batch_size, sequence_length]
+        if id != -1:
+            max_ids = torch.tensor([[id]], device='cuda:3')
+        else:
+            max_ids = torch.argmax(logits, dim=-1)  # [batch_size, sequence_length]
 
         
         top5_ids = self.image_features[1]  # [batch_size, 1948, 5]
         # 假设 logits 是 [batch_size, sequence_length] 的张量
         # 假设 top5_ids 是 [batch_size, 1948, 5] 的张量
-
-        # 获取 max_ids, 形状为 [batch_size, sequence_length]
-        max_ids = torch.argmax(logits, dim=-1)
 
         # 获取第一个样本的 max_ids 和 top5_ids
         max_ids_sample = max_ids[0]  # 形状为 [sequence_length]
@@ -741,7 +887,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         # 返回调整后的索引
         return adjusted_indices
     
-    def get_image_attention_mask(self,logits,attention_mask,method="overlap"):
+    def get_image_attention_mask(self,logits,attention_mask,method="overlap", prob=0.5, ids=[]):
         """
         get image attention mask
 
@@ -760,17 +906,51 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         elif method == "keep_overlap":
             matched_indices = self.get_overlap_image_tokens(logits)
             adjusted_indices_tensor = torch.tensor(matched_indices)
-            for i in range(self.start_image_pos[0], self.end_image_pos[0]+1):
-                if i >= attention_mask.shape[-1]:
-                    break
-                random_num = torch.rand(1)
-                if random_num < 1/(self.image_features[0][0][i-self.start_image_pos[0]][0].item()):
-                    attention_mask[:, i] = 0
+
+            indices = torch.arange(self.start_image_pos[0], self.end_image_pos[0] + 1)
+
+            # 确保索引范围不超过 attention_mask 的维度
+            indices = indices[indices < attention_mask.shape[-1]]
+
+            # 生成随机数 tensor
+            random_nums = torch.rand(indices.shape[0])
+
+            mask_condition = random_nums < prob
+
+            # 应用掩码修改
+            attention_mask[:, indices[mask_condition]] = 0
             if adjusted_indices_tensor.shape == 0:
                 return attention_mask
             attention_mask[:, adjusted_indices_tensor] = 1
+        elif method == "VQA":
+            for id in ids:
+                matched_indices = self.get_overlap_image_tokens(logits,id)
+                adjusted_indices_tensor = torch.tensor(matched_indices)
+
+                indices = torch.arange(self.start_image_pos[0], self.end_image_pos[0] + 1)
+
+                # 确保索引范围不超过 attention_mask 的维度
+                indices = indices[indices < attention_mask.shape[-1]]
+
+                # 生成随机数 tensor
+                random_nums = torch.rand(indices.shape[0])
+
+                mask_condition = random_nums < prob
+
+                # 应用掩码修改
+                attention_mask[:, indices[mask_condition]] = 0
+                if adjusted_indices_tensor.shape == 0:
+                    continue
+                attention_mask[:, adjusted_indices_tensor] = 1
+
         elif method == "all_image":
             attention_mask[:, self.start_image_pos[0]:self.end_image_pos[0]+1] = 0
+        elif method == "random_image":
+            # mask based on random number
+            for i in range(self.start_image_pos[0], self.end_image_pos[0]+1):
+                random_num = torch.rand(1)
+                if random_num < prob:
+                    attention_mask[:, i] = 0
         elif method == "logits":
             # mask based on self.logits_mask_prob
             for i in range(len(self.logits_mask_prob)):
@@ -1009,7 +1189,7 @@ def inspect_decode(all_embeddings, processor, early_exit_output):
     print(sentence)
     return sentence
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import numpy as np
 import os
 

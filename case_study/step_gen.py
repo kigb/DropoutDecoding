@@ -6,7 +6,7 @@ from PIL import Image
 def main(args):
     model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
     processor = LlavaNextProcessor.from_pretrained(model_path)
-    device = 'cuda:3'
+    device = 'cuda:0'
     model = CustomLlavaNextForConditionalGeneration.from_pretrained(
         model_path,
         torch_dtype=torch.float16, 
@@ -17,7 +17,7 @@ def main(args):
         img_path = input("Please input the image path, press Enter to continue.")
         if img_path != "":
             image = Image.open("/home/fyx/vlm_images/" + img_path)
-        prompt = "[INST] <image>\nDescribe the image [/INST]"
+        prompt = "[INST] <image>\nIs there a person in the image? [/INST]"
         inputs = processor(prompt, image, return_tensors="pt").to(device)
         output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=False,num_beams=1)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)

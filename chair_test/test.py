@@ -7,6 +7,7 @@ import numpy as np
 from tqdm import tqdm
 from transformers import LlavaNextProcessor
 from models.utils import CustomLlavaNextForConditionalGeneration
+from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 import torch
 from pycocotools.coco import COCO
 from pycocoevalcap.eval import COCOEvalCap
@@ -127,12 +128,20 @@ def main(args):
     # load model
     model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
     processor = LlavaNextProcessor.from_pretrained(model_path)
-    device = 'cuda:1'
-    model = CustomLlavaNextForConditionalGeneration.from_pretrained(
-        model_path,
-        torch_dtype=torch.float16, 
-        device_map = device
-    )
+    device = 'cuda:0'
+    if args.original is True:
+        print("generating original")
+        model = LlavaNextForConditionalGeneration.from_pretrained(
+            model_path,
+            torch_dtype=torch.float16,
+            device_map = device
+        )
+    else :
+        model = CustomLlavaNextForConditionalGeneration.from_pretrained(
+            model_path,
+            torch_dtype=torch.float16,
+            device_map = device
+        )
 
     # COCO dataset
     coco, coco_anns = load_coco_data("/data3/fyx/COCO/")
@@ -213,7 +222,11 @@ def main(args):
         image = load_image(image_path)
         prompt = "[INST] <image>\nDescribe the image [/INST]"
         inputs = processor(prompt, image, return_tensors="pt").to(device)
-        output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
+        if args.original is True:
+            output_ids = model.generate(**inputs, max_new_tokens=512, num_beams=1,
+                                        pad_token_id=processor.tokenizer.eos_token_id)
+        else:
+            output_ids = model.generate(**inputs, max_new_tokens=512, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
         output_text = output_text[0].split('[/INST]', 1)[-1].strip()
         sentence_list = output_text.split(".")
@@ -307,7 +320,7 @@ def main(args):
     data_dir = "/data3/fyx/COCO"
     chair_input_path = formulated_output_path
     method = args.method
-    chair_eval(chair_input_path=chair_input_path, model_type="llava",num_images=200,output_dir="./results",dataset_name="coco",data_dir=data_dir,metric=method,verbosity=True)
+    chair_eval(chair_input_path=chair_input_path, model_type="llava",num_images=500,output_dir="./results",dataset_name="coco",data_dir=data_dir,metric=method,verbosity=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -316,5 +329,6 @@ if __name__ == "__main__":
     parser.add_argument("--start-step", type=int, default=0)
     parser.add_argument("--use-prev-sample", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--original",type=bool, default=False)
     args = parser.parse_args()
     main(args)
