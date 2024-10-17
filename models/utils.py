@@ -496,7 +496,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             self.all_outputs = []
         
         def restore_attention_mask(attention_mask):
-            attention_mask[:, self.start_generation_pos:] = 1
+            attention_mask[:, :] = 1
             return attention_mask
         
         # kv会改变，需要深拷贝来进行储存
@@ -544,7 +544,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
 
                 # 将提取的元素转换为 CPU 上的 numpy 数组（如果需要在 CPU 上处理）
                 self.int_array = elements_after_32000.cpu().numpy()
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"random_image",0.7,[self.int_array[1]])
+            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.6,[self.int_array[1]])
             outputs_r = self.language_model(
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -557,7 +557,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             )
             attention_mask = restore_attention_mask(attention_mask)
             outputs_all.append(outputs_r)
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"random_image",0.5,[self.int_array[1]])
+            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.4,[self.int_array[1]])
             outputs_r1 = self.language_model(
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -570,7 +570,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             )
             outputs_all.append(outputs_r1)
             attention_mask = restore_attention_mask(attention_mask)
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"random_image",0.3,[self.int_array[1]])
+            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.2,[self.int_array[1]])
             outputs_r2 = self.language_model(
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -841,7 +841,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         logits = outputs['logits']
         # print(start_image_pos, end_image_pos)
         image_logits = self.get_image_logits(logits=logits, start_image_pos=start_image_pos[0], end_image_pos=end_image_pos[0])
-        values, ids = self.get_topk_token_id(image_logits, topk=5)
+        values, ids = self.get_topk_token_id(image_logits, topk=6)
         image_features = (values, ids)
         return image_features
     
@@ -859,7 +859,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             overlap_image_tokens: overlap image tokens
         """
         if id != -1:
-            max_ids = torch.tensor([[id]], device='cuda:3')
+            max_ids = torch.tensor([[id]], device='cuda:2')
         else:
             max_ids = torch.argmax(logits, dim=-1)  # [batch_size, sequence_length]
 

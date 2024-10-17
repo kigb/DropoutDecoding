@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 from transformers import LlavaNextProcessor
 from models.utils import CustomLlavaNextForConditionalGeneration
-from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
+from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration,LlavaForConditionalGeneration,AutoProcessor
 import torch
 from pycocotools.coco import COCO
 from pycocoevalcap.eval import COCOEvalCap
@@ -126,12 +126,14 @@ def chair_eval(chair_input_path, model_type,num_images,output_dir,dataset_name,d
 
 def main(args):
     # load model
-    model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
-    processor = LlavaNextProcessor.from_pretrained(model_path)
-    device = 'cuda:0'
+    # model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
+    model_path = "/data3/fyx/llava-1.5-7b-hf"
+    # processor = LlavaNextProcessor.from_pretrained(model_path)
+    processor = AutoProcessor.from_pretrained(model_path)
+    device = 'cuda:2'
     if args.original is True:
         print("generating original")
-        model = LlavaNextForConditionalGeneration.from_pretrained(
+        model = LlavaForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype=torch.float16,
             device_map = device
@@ -220,15 +222,17 @@ def main(args):
         # begin process input data
         image_path = "/data3/fyx/COCO/val2014/" + img_file
         image = load_image(image_path)
-        prompt = "[INST] <image>\nDescribe the image [/INST]"
+        prompt = "USER: <image>\nDescribe the image. ASSISTANT:"
         inputs = processor(prompt, image, return_tensors="pt").to(device)
         if args.original is True:
-            output_ids = model.generate(**inputs, max_new_tokens=512, num_beams=1,
-                                        pad_token_id=processor.tokenizer.eos_token_id)
+            output_ids = model.generate(**inputs, max_new_tokens=512, 
+                                        # num_beams=1,
+                                        do_sample=True
+                                        )
         else:
             output_ids = model.generate(**inputs, max_new_tokens=512, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
-        output_text = output_text[0].split('[/INST]', 1)[-1].strip()
+        output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
         sentence_list = output_text.split(".")
         sentence_filter_list = []
         for sentence in sentence_list:

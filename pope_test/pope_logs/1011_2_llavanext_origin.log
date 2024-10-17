@@ -1,0 +1,34 @@
+generating original
+the pope file is /home/fyx/hallucination/pope_test/pope_metric/output/coco/coco_pope_adversarial.json
+3000
+Answer saved successfully.
+Answer file: 10-11_16-00-31_ans.json
+TP	FP	TN	FN	
+1353	267	1233	147
+Accuracy: 0.862
+Precision: 0.8351851851851851
+Recall: 0.902
+F1 score: 0.8673076923076923
+Yes ratio: 0.54
+the pope file is /home/fyx/hallucination/pope_test/pope_metric/output/coco/coco_pope_popular.json
+3000
+Answer saved successfully.
+Answer file: 10-11_16-14-39_ans.json
+TP	FP	TN	FN	
+1353	150	1350	147
+Accuracy: 0.901
+Precision: 0.9001996007984032
+Recall: 0.902
+F1 score: 0.9010989010989011
+Yes ratio: 0.501
+the pope file is /home/fyx/hallucination/pope_test/pope_metric/output/coco/coco_pope_random.json
+3000
+Answer saved successfully.
+Answer file: 10-11_16-28-48_ans.json
+TP	FP	TN	FN	
+1353	76	1424	147
+Accuracy: 0.9256666666666666
+Precision: 0.946815955213436
+Recall: 0.902
+F1 score: 0.9238648002731308
+Yes ratio: 0.47633333333333333

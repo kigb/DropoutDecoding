@@ -1,4 +1,5 @@
 import argparse
+import shutil
 from datetime import datetime
 import json
 import os
@@ -12,6 +13,9 @@ from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 import torch
 from pycocotools.coco import COCO
 from pycocoevalcap.eval import COCOEvalCap
+from transformers import LlavaForConditionalGeneration, \
+    AutoProcessor
+from models.llava import CustomLlavaForConditionalGeneration
 import requests
 from PIL import Image
 from io import BytesIO
@@ -77,10 +81,12 @@ def save_ans(ans, question, answer):
     }
     ans.append(image_ans_pair)
 
-def evaluate(ans_file,label_file):
+def evaluate(ans_file,label_file, number = 3000):
+    #load first 300
     answers = [json.loads(q) for q in open(ans_file, 'r')]
     label_list = [json.loads(q)['label'] for q in open(label_file, 'r')]
-
+    answers = answers[:number]
+    label_list = label_list[:number]
     for answer in answers:
         text = answer['answer']
 
@@ -139,64 +145,113 @@ def evaluate(ans_file,label_file):
 
 def main(args):
     # ----------------- Load Model -----------------
-    model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
-    processor = LlavaNextProcessor.from_pretrained(model_path)
-    device = 'cuda:3'
+    if args.model == "llava-next":
+        model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
+    elif args.model == "llava":
+        model_path = "/data3/fyx/llava-1.5-7b-hf"
+    if args.model == "llava-next":
+        processor = LlavaNextProcessor.from_pretrained(model_path)
+    elif args.model == "llava":
+        processor = AutoProcessor.from_pretrained(model_path)
+    device = 'cuda:2'
     if args.original is True:
         print("generating original")
-        model = LlavaNextForConditionalGeneration.from_pretrained(
-            model_path,
-            torch_dtype=torch.float16,
-            device_map = device
-        )
+        if args.model == "llava-next":
+            model = LlavaNextForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                device_map = device
+            )
+        elif args.model == "llava":
+            model = LlavaForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                device_map=device
+            )
     else:
-        model = CustomLlavaNextForConditionalGeneration.from_pretrained(
-        model_path,
-        torch_dtype=torch.float16, 
-        device_map = device
-    )
+        if args.model == "llava-next":
+            model = CustomLlavaNextForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                device_map = device
+            )
+        elif args.model == "llava":
+            model = CustomLlavaForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                device_map=device
+            )
+
     model = model.to(device)
     
     # ----------------- Load Data -----------------
     image_base_path = "/data3/fyx/COCO/val2014/"
-    if args.original is True:
+    if args.refresh_data is True:
         prepare_pope_data()
+        cur_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        src_dir = "/home/fyx/hallucination/pope_test/pope_metric/output/coco/"
+        dst_dir = f"/home/fyx/hallucination/pope_test/pope_samples/{cur_time}/coco/"
+
+        # Create destination directory if it doesn't exist
+        os.makedirs(dst_dir, exist_ok=True)
+
+        # Copy files from source to destination
+        for file_name in os.listdir(src_dir):
+            full_file_name = os.path.join(src_dir, file_name)
+            if os.path.isfile(full_file_name):
+                shutil.copy(full_file_name, dst_dir)
+
+        print(f"Files copied to {dst_dir}")
     # popefilepath can also be random or popular
-    pope_file_path = "/home/fyx/hallucination/pope_test/pope_metric/output/coco/coco_pope_adversarial.json"
-    pope_data = parse_pope_file(pope_file_path)
-    print(len(pope_data))
-    ans = []
-    for i in tqdm(range(len(pope_data))):
-        image_path = image_base_path + pope_data[i]["image"]
-        text = pope_data[i]["text"]
-        image = load_image(image_path)
-        prompt = f"[INST] <image>\n{text}[/INST]"
-        inputs = processor(prompt, image, return_tensors="pt").to(device)
-        if args.original is True:
-            output_ids = model.generate(**inputs, max_new_tokens=1, num_beams=1,
-                                        pad_token_id=processor.tokenizer.eos_token_id)
-        else:
-            output_ids = model.generate(**inputs, max_new_tokens=1, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
-        # output_ids = model.generate(**inputs, max_new_tokens=1, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
-        output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
-        output_text = output_text[0].split('[/INST]', 1)[-1].strip()
-        # print(output_text)
-        save_ans(ans, text, output_text)
-    ans_path = "/home/fyx/hallucination/pope_test/pope_metric/answer/"
-    # file name is timestamp_ans.json
-    timestamp = datetime.now().strftime("%m-%d_%H-%M-%S")
-    ans_file_name = timestamp + "_ans.json"
-    with open(ans_path + ans_file_name, 'w') as file:
-        for item in ans:
-            json_str = json.dumps(item)
-            file.write(json_str + "\n")
-    print("Answer saved successfully.")
-    print(f"Answer file: {ans_file_name}")
-    # ----------------- Evaluate -----------------
-    evaluate(ans_path + ans_file_name, pope_file_path)
+    pope_file_pathes = ["/home/fyx/hallucination/pope_test/pope_metric/output/coco/coco_pope_adversarial.json", "/home/fyx/hallucination/pope_test/pope_metric/output/coco/coco_pope_popular.json","/home/fyx/hallucination/pope_test/pope_metric/output/coco/coco_pope_random.json" ]
+    for pope_file_path in pope_file_pathes:
+        print(f"the pope file is {pope_file_path}")
+        pope_data = parse_pope_file(pope_file_path)
+        print(len(pope_data))
+        ans = []
+        # for i in tqdm(range(len(pope_data))):
+        for i in tqdm(range(args.number)):
+            image_path = image_base_path + pope_data[i]["image"]
+            text = pope_data[i]["text"]
+            image = load_image(image_path)
+            if args.model == "llava-next":
+                prompt = f"[INST] <image>\n{text}[/INST]"
+            elif args.model == "llava":
+                prompt = f"USER: <image>\n{text} ASSISTANT:"
+            inputs = processor(prompt, image, return_tensors="pt").to(device)
+            if args.original is True:
+                output_ids = model.generate(**inputs, max_new_tokens=1, num_beams=1,
+                                            pad_token_id=processor.tokenizer.eos_token_id)
+            else:
+                output_ids = model.generate(**inputs, max_new_tokens=1, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
+            # output_ids = model.generate(**inputs, max_new_tokens=1, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
+            output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
+            if args.model == "llava-next":
+                output_text = output_text[0].split('[/INST]', 1)[-1].strip()
+            elif args.model == "llava":
+                output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
+            # print(output_text)
+            save_ans(ans, text, output_text)
+        ans_path = "/home/fyx/hallucination/pope_test/pope_metric/answer/"
+        # file name is timestamp_ans.json
+        timestamp = datetime.now().strftime("%m-%d_%H-%M-%S")
+        ans_file_name = timestamp + "_ans.json"
+        with open(ans_path + ans_file_name, 'w') as file:
+            for item in ans:
+                json_str = json.dumps(item)
+                file.write(json_str + "\n")
+        print("Answer saved successfully.")
+        print(f"Answer file: {ans_file_name}")
+        # ----------------- Evaluate -----------------
+
+        evaluate(ans_path + ans_file_name, pope_file_path,args.number)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="llava-next")
     parser.add_argument("--original",type=bool, default=False)
+    parser.add_argument("--refresh-data", type=bool, default=False)
+    parser.add_argument("--number", type=int, default=3000)
     args = parser.parse_args()
     main(args)
