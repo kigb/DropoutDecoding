@@ -9,7 +9,7 @@ import numpy as np
 from tqdm import tqdm
 # from transformers import LlavaNextProcessor
 from models.utils import CustomLlavaNextForConditionalGeneration
-from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
+from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration, InstructBlipForConditionalGeneration
 import torch
 from pycocotools.coco import COCO
 from pycocoevalcap.eval import COCOEvalCap
@@ -19,6 +19,7 @@ from models.llava import CustomLlavaForConditionalGeneration
 import requests
 from PIL import Image
 from io import BytesIO
+from models.instructblip import CustomInstructBlipForConditionalGeneration
 
 def load_coco_data(data_dir):
     annotation_file_path = data_dir + "annotations/instances_val2014.json"
@@ -149,11 +150,11 @@ def main(args):
         model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
     elif args.model == "llava":
         model_path = "/data3/fyx/llava-1.5-7b-hf"
-    if args.model == "llava-next":
-        processor = LlavaNextProcessor.from_pretrained(model_path)
-    elif args.model == "llava":
-        processor = AutoProcessor.from_pretrained(model_path)
-    device = 'cuda:2'
+    elif args.model == "instructblip":
+        model_path = "/data4/fyx/instructblip-vicuna-7b"
+
+    processor = AutoProcessor.from_pretrained(model_path)
+    device = 'cuda:3'
     if args.original is True:
         print("generating original")
         if args.model == "llava-next":
@@ -168,6 +169,13 @@ def main(args):
                 torch_dtype=torch.float16,
                 device_map=device
             )
+        elif args.model == "instructblip":
+            model = InstructBlipForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                device_map=device
+            )
+
     else:
         if args.model == "llava-next":
             model = CustomLlavaNextForConditionalGeneration.from_pretrained(
@@ -177,6 +185,12 @@ def main(args):
             )
         elif args.model == "llava":
             model = CustomLlavaForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                device_map=device
+            )
+        elif args.model == "instructblip":
+            model = CustomInstructBlipForConditionalGeneration.from_pretrained(
                 model_path,
                 torch_dtype=torch.float16,
                 device_map=device
@@ -218,18 +232,22 @@ def main(args):
                 prompt = f"[INST] <image>\n{text}[/INST]"
             elif args.model == "llava":
                 prompt = f"USER: <image>\n{text} ASSISTANT:"
-            inputs = processor(prompt, image, return_tensors="pt").to(device)
+            elif args.model == "instructblip":
+                prompt = text
+            inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
             if args.original is True:
                 output_ids = model.generate(**inputs, max_new_tokens=1, num_beams=1,
                                             pad_token_id=processor.tokenizer.eos_token_id)
             else:
-                output_ids = model.generate(**inputs, max_new_tokens=1, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
+                output_ids = model.generate(**inputs, max_new_tokens=1,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
             # output_ids = model.generate(**inputs, max_new_tokens=1, use_input_embeddings=False,num_beams=1,pad_token_id=processor.tokenizer.eos_token_id)
             output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
             if args.model == "llava-next":
                 output_text = output_text[0].split('[/INST]', 1)[-1].strip()
             elif args.model == "llava":
                 output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
+            elif args.model == "instructblip":
+                output_text = processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
             # print(output_text)
             save_ans(ans, text, output_text)
         ans_path = "/home/fyx/hallucination/pope_test/pope_metric/answer/"

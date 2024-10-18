@@ -136,7 +136,7 @@ def main(args):
     model_path = "/data4/fyx/instructblip-vicuna-7b"
     # processor = LlavaNextProcessor.from_pretrained(model_path)
     processor = AutoProcessor.from_pretrained(model_path)
-    device = 'cuda:3'
+    device = 'cuda:1'
     if args.original is True:
         print("generating original")
         model = InstructBlipForConditionalGeneration.from_pretrained(

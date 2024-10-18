@@ -12,11 +12,17 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 import torch.nn.functional as F
 
 from models.utils import select_by_vote
-
+# seed = 114115
+seed = 5217
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)
+# processor = InstructBlipProcessor.from_pretrained("/data4/fyx/instructblip-vicuna-7b")
 start_img_pos = -1
 end_img_pos = -1
 start_generation_pos = -1
 first_generation = False
+pope_array = []
 class CustomLlamaForCausalLM(LlamaForCausalLM):
     def __init__(self, config):
         super().__init__(config)
@@ -48,6 +54,7 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
         global end_img_pos
         global start_generation_pos
         global first_generation
+        global pope_array
         if first_generation is True:
             self.first_generation = True
             first_generation = False
@@ -81,6 +88,33 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
         def restore_attention_mask(attention_mask):
             attention_mask[:, :] = 1
             return attention_mask
+        VQA = True
+        if VQA:
+            outputs_all = [] # refresh outputs_all
+            for prob in [0.3,0.5,0.7]:
+                original_past_key_values_ = copy.deepcopy(original_past_key_values)
+                attention_mask = restore_attention_mask(attention_mask)
+                attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",prob,[pope_array[1]])
+                outputs_all.append(self.model(
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=original_past_key_values_,
+                    inputs_embeds=inputs_embeds,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                ))
+            outputs_r = select_by_vote(outputs_all)
+            loss = None
+            return CausalLMOutputWithPast(
+                loss=loss,
+                logits=outputs_r[0],
+                past_key_values=outputs_r.past_key_values,
+                hidden_states=outputs_r.hidden_states,
+                attentions=outputs_r.attentions,
+            )
+
         if self.first_generation is not True:
             outputs_all = []
             mask_probs = [0.1,0.2,0.3]
@@ -224,7 +258,7 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
             overlap_image_tokens: overlap image tokens
         """
         if id != -1:
-            max_ids = torch.tensor([[id]], device='cuda:2')
+            max_ids = torch.tensor([[id]], device=self.image_features[1].device)
         else:
             max_ids = torch.argmax(logits, dim=-1)  # [batch_size, sequence_length]
 
@@ -419,12 +453,20 @@ class CustomInstructBlipForConditionalGeneration(InstructBlipForConditionalGener
                 end_img_pos = language_attention_mask.shape[-1] - 1
                 global start_generation_pos
                 start_generation_pos = attention_mask.shape[-1]
+                # pope
+                data = input_ids[0]
+                global pope_array
+                indices_32000 = (data == 727).nonzero(as_tuple=True)[0]
+                if indices_32000.numel() > 0:
+                    index_32000 = indices_32000[0].item()
+                    elements_after_32000 = data[index_32000 + 1:]
+                    pope_array = elements_after_32000.cpu().numpy()
                 # concatenate query embeddings with prompt embeddings
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-                print(inputs_embeds.shape)
+                # print(inputs_embeds.shape)
                 inputs_embeds = torch.cat([language_model_inputs, inputs_embeds.to(language_model_inputs.device)],
                                           dim=1)
-                print(inputs_embeds.shape)
+                # print(inputs_embeds.shape)
                 # add image_embeds length to max_length, so that the final max_length in counted only on token embeds
                 # -1 is to account for the prepended BOS after `generate.`
                 if not self.language_model.config.is_encoder_decoder:
@@ -432,7 +474,7 @@ class CustomInstructBlipForConditionalGeneration(InstructBlipForConditionalGener
                                                         language_model_inputs.shape[1] - 1
                         generate_kwargs["min_length"] = generate_kwargs.get("min_length", 0) + \
                                                         language_model_inputs.shape[1]
-                print(self.language_model.config)
+                # print(self.language_model.config)
                 outputs = self.language_model.generate(
                         inputs_embeds=inputs_embeds,
                         attention_mask=attention_mask,

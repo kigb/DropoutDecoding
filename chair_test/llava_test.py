@@ -134,7 +134,7 @@ def main(args):
     model_path = "/data3/fyx/llava-1.5-7b-hf"
     # processor = LlavaNextProcessor.from_pretrained(model_path)
     processor = AutoProcessor.from_pretrained(model_path)
-    device = 'cuda:3'
+    device = 'cuda:1'
     if args.original is True:
         print("generating original")
         model = LlavaForConditionalGeneration.from_pretrained(

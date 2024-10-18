@@ -1,4 +1,6 @@
 # Import the necessary modules from the transformers library
+import math
+
 from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches, LlavaNextCausalLMOutputWithPast # one function explicitly used in forward.
 import torch
@@ -21,18 +23,8 @@ def select_by_vote(outputs_all):
     for output in outputs_all:
         token_id = argmax(output[0][-1])  # 获取每个output中最后一个token的id
         id_counter[token_id] += 1  # 统计该id出现次数
-    
-    # 找到出现次数最多的id
     most_common_id = id_counter.most_common(1)[0][0]  # 取出现次数最多的id
     
-    # 返回outputs_all中第一个包含这个id的output
-
-    # # 遍历所有输出，打印分歧情况
-    # for output in outputs_all:
-    #     current_id = argmax(output[0][-1])
-    #     if current_id != most_common_id:
-    #         print(f"Discrepancy found: current_id={current_id}, most_common_id={most_common_id}")
-
     for output in outputs_all:
         if argmax(output[0][-1]) == most_common_id:
             return output
@@ -519,6 +511,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        print("original en, ve:", self.calculate_entropy_varentropy(outputs['logits']), "token:", self.processor.decode(torch.argmax(outputs['logits'][0][-1])))
         attention_mask = restore_attention_mask(attention_mask)
         outputs_all.append(outputs)
         logits = outputs['logits']
@@ -530,7 +523,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             with open("image_features.json", "w") as f:
                 json.dump(self.processor.batch_decode(self.image_features[1][0]), f)
         max_vote = True
-        VQA = True
+        VQA = False
         if VQA:
             # outputs_all = [] # refresh outputs_all
             data = input_ids[0]
@@ -594,7 +587,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
 
 
         if not self.is_first_generation:
-            # outputs_all = [] # refresh outputs_all
+            outputs_all = [] # refresh outputs_all
             # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="all_image")
             # outputs_noimg = self.language_model(
             #     attention_mask=attention_mask,
@@ -710,8 +703,8 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                         cur_sharpness = std_dev
                         outputs_r = i
             if max_vote:
-                outputs_r = select_by_vote(outputs_all)     
-
+                outputs_r = select_by_vote(outputs_all)
+            print("maxvote en, ve:", self.calculate_entropy_varentropy(outputs_r['logits']),"token:", self.processor.decode(torch.argmax(outputs_r['logits'][0][-1])))
             self.logits_mask_prob.append(1/torch.max(outputs_r[0][-1]).item())
             return LlavaNextCausalLMOutputWithPast(
                 loss=loss,
@@ -1014,9 +1007,31 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             
             except ValueError:
                 print("Invalid input. Please enter an integer.")
-        
-            
-    
+
+    def calculate_entropy_varentropy(self, logits) -> (float, float):
+        """
+        Calculate the entropy and varentropy of the probability distribution using log_softmax.
+
+        Args:
+            logits (torch.Tensor): Input tensor of logits with shape [vocab_size].
+
+        Returns:
+            entropy (float): The calculated entropy.
+            varentropy (float): The calculated varentropy.
+        """
+        # Calculate log probabilities using log_softmax
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = torch.exp(log_probs)
+
+        # Calculate entropy in base-2
+        entropy = -torch.sum(probs * log_probs) / math.log(2)
+
+        # Calculate varentropy
+        varentropy = torch.sum(probs * (log_probs / math.log(2) + entropy) ** 2)
+
+        return entropy.item(), varentropy.item()
+
+
 import torch.nn.functional as F
 def calculate_cosine_similarity(inputs_embeds, all_embeddings, batch_size=24):
     """

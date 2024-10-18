@@ -5,14 +5,27 @@ from transformers import LlavaForConditionalGeneration, LlavaProcessor
 import torch
 from typing import List, Optional, Tuple, Union
 from transformers.models.llava.modeling_llava import LlavaCausalLMOutputWithPast
-from models.utils import select_by_vote
 import torch.nn.functional as F
 import math
+from collections import Counter
 seed = 24
 torch.manual_seed(seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(seed)
-
+def select_by_vote(outputs_all):
+    id_counter = Counter()  # 用来统计每个token id出现的次数
+    
+    # 统计每个输出中最后一个token的id
+    for output in outputs_all:
+        token_id = argmax(output[0][-1])  # 获取每个output中最后一个token的id
+        id_counter[token_id] += 1  # 统计该id出现次数
+    most_common_id = id_counter.most_common(1)[0][0]  # 取出现次数最多的id
+    
+    for output in outputs_all:
+        if argmax(output[0][-1]) == most_common_id:
+            return output
+    
+    return None  # 如果没有找到，返回None
 class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
     def __init__(self, config):
         super().__init__(config)
@@ -283,44 +296,19 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
 
                 # 将提取的元素转换为 CPU 上的 numpy 数组（如果需要在 CPU 上处理）
                 self.int_array = elements_after_32000.cpu().numpy()
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.7,[self.int_array[1]])
-            outputs_r = self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values1,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            # attention_mask = restore_attention_mask(attention_mask)
-            outputs_all.append(outputs_r)
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.5,[self.int_array[1]])
-            outputs_r1 = self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values2,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            outputs_all.append(outputs_r1)
-            # attention_mask = restore_attention_mask(attention_mask)
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.3,[self.int_array[1]])
-            outputs_r2 = self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            outputs_all.append(outputs_r2)
+            for prob in [0.3,0.5,0.7]:
+                attention_mask = restore_attention_mask(attention_mask)
+                attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",prob,[self.int_array[1]])
+                outputs_all.append(self.language_model(
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=original_past_key_values1,
+                    inputs_embeds=inputs_embeds,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                ))
             outputs_r = select_by_vote(outputs_all)
             loss = None
             return LlavaCausalLMOutputWithPast(
@@ -332,68 +320,26 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
             )
         if not self.is_first_generation:
             outputs_all = []
-            attention_mask = self.get_image_attention_mask(logits, attention_mask, method="keep_overlap")
-            # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
-            attention_mask = self.get_image_attention_mask(logits, attention_mask, method="entropy")
-            outputs_all.append(self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            ))
-            if max_vote:
+            probs = [0.3,0.5,0.7,0.9]
+            method_ = "logits"
+            for mprob in probs:
+                original_past_key_values_ = copy.deepcopy(original_past_key_values)
                 attention_mask = restore_attention_mask(attention_mask)
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="keep_overlap", prob=0.3)
-                # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="entropy")
-                outputs_all.append(
-                    self.language_model(
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        past_key_values=original_past_key_values1,
-                        inputs_embeds=inputs_embeds,
-                        use_cache=use_cache,
-                        output_attentions=output_attentions,
-                        output_hidden_states=output_hidden_states,
-                        return_dict=return_dict,
-                    )
-                )
-                attention_mask = restore_attention_mask(attention_mask)
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="keep_overlap", prob=0.7)
-                # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="entropy")
-                outputs_all.append(
-                    self.language_model(
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        past_key_values=original_past_key_values2,
-                        inputs_embeds=inputs_embeds,
-                        use_cache=use_cache,
-                        output_attentions=output_attentions,
-                        output_hidden_states=output_hidden_states,
-                        return_dict=return_dict,
-                    )
-                )
-                attention_mask = restore_attention_mask(attention_mask)
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="keep_overlap", prob=0.9)
-                # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="entropy")
-                outputs_all.append(
-                    self.language_model(
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        past_key_values=original_past_key_values_3,
-                        inputs_embeds=inputs_embeds,
-                        use_cache=use_cache,
-                        output_attentions=output_attentions,
-                        output_hidden_states=output_hidden_states,
-                        return_dict=return_dict,
-                    )
-                )
+                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="keep_overlap", prob=mprob)
+                # original "table", image features seach table image 1 projection cat dog image 2 project table desk
+                # img token 1 2 3 4 5 3 has table, 1 2 4 5 mprob 0.3 0.5 
+                attention_mask = self.get_image_attention_mask(logits, attention_mask, method=method_)
+                outputs_all.append(self.language_model(
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=original_past_key_values_,
+                    inputs_embeds=inputs_embeds,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                ))
+
             if max_vote:
                 outputs_r = select_by_vote(outputs_all)
 
@@ -408,6 +354,7 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
                 hidden_states=outputs.hidden_states,
                 attentions=outputs.attentions,
             )
+
         self.logits_mask_prob.append(1 / torch.max(logits[-1][-1]).item())
         en, ven = self.calculate_entropy_varentropy(logits[0][-1])
         self.token_entropies.append(en)
@@ -633,3 +580,30 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
         varentropy = torch.sum(probs * (log_probs / math.log(2) + entropy) ** 2)
 
         return entropy.item(), varentropy.item()
+
+def load_image(image_file):
+    if image_file.startswith('http://') or image_file.startswith('https://'):
+        response = requests.get(image_file)
+        image = Image.open(BytesIO(response.content)).convert('RGB')
+    else:
+        image = Image.open(image_file).convert('RGB')
+    return image
+    
+def main():
+    model_path = "/data3/fyx/llava-1.5-7b-hf" # replace this
+    processor = LlavaProcessor.from_pretrained(model_path)
+    device = 'cuda:1'
+    model = CustomLlavaForConditionalGeneration.from_pretrained(
+            model_path,
+            torch_dtype=torch.float16,
+            device_map=device
+        )
+    image_path = ""
+    image = load_image(image_path)
+    prompt = "USER: <image>\nDescribe the image. ASSISTANT:"
+    inputs = processor(prompt, image, return_tensors="pt").to(device)
+    output_ids = model.generate(**inputs, max_new_tokens=512, use_input_embeddings=False, num_beams=1,
+                                        pad_token_id=processor.tokenizer.eos_token_id)
+    output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
+    output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
+    print(output_text)
