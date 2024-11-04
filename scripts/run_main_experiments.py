@@ -40,7 +40,7 @@ for cur_method in all_methods:
                     f"#SBATCH --output=/fsx/zhuokai/maskllama/slurm/main_experiments/{run_name}.stdout\n",
                     f"#SBATCH --error=/fsx/zhuokai/maskllama/slurm/main_experiments/{run_name}.stderr\n",
                     "\n",
-                    f"python -m chair_test.chair_test --seed {cur_seed} --method {run_name} --coco-data-dir {data_dir} --model-path {model_path} --image-numbers 500 --sample-save-name {run_name}.log --model {model_name}",
+                    f"python -m chair_test.chair_test --seed {cur_seed} --method {run_name}_ --coco-data-dir {data_dir} --model-path {model_path} --image-numbers 500 --sample-save-name {run_name}.log --model {model_name}",
                 ]
                 if cur_method == "original":
                     lines_to_write.append(" --original True\n")
