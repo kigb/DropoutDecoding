@@ -1,0 +1,3 @@
+dataset/*
+slurm/*
+scripts/**/*.slurm
