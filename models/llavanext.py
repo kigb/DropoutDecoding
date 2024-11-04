@@ -12,6 +12,12 @@ from typing import List, Optional, Tuple, Union
 import json
 import copy
 from collections import Counter
+import torch.nn.functional as F
+# seed = 114115
+seed = 506
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)
 
 def argmax(output):
     return torch.argmax(output).item()
@@ -48,10 +54,11 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         self.image_features = None # 用于记录图片特征
         self.logits_mask_prob = [] # 用于text部分mask的概率
         self.all_outputs = [] # 用于记录所有输出，用于case study
-        self.processor = LlavaNextProcessor.from_pretrained("/data3/fyx/llava-v1.6-mistral-7b-hf")
+        # self.processor = LlavaNextProcessor.from_pretrained("/data3/fyx/llava-v1.6-mistral-7b-hf")
         self.do_step = True # 用于控制是否进行step操作
         self.skip_steps = 0 # 用于控制跳过的step数
         self.int_array = []
+        self.vision_uncert_dict = None
 
     def _merge_input_ids_with_image_features(
         self,
@@ -316,7 +323,6 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        use_input_embeddings = False,
     ) -> Union[dict, Tuple]:
         r"""
         Args:
@@ -437,9 +443,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
 
                 # print(f"dont use early stop exit on input embeddings")
                 
-                if use_input_embeddings:
-                    print("Exiting early from generate()")
-                    raise EarlyExitException("Early exit triggered", early_exit_output)
+
             
             # pixel_values is not None but is empty ---> text only cases
             elif pixel_values is not None and input_ids.shape[1] != 1 and pixel_values.size(0) == 0:
@@ -486,21 +490,17 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             self.start_generation_pos = attention_mask.shape[-1] # 开始生成的位置
             self.do_step = True
             self.all_outputs = []
+
         
         def restore_attention_mask(attention_mask):
             attention_mask[:, :] = 1
             return attention_mask
         
         # kv会改变，需要深拷贝来进行储存
-        dangerous_text_part = False
         original_past_key_values = copy.deepcopy(past_key_values)
-        original_past_key_values1 = copy.deepcopy(past_key_values)
-        original_past_key_values2 = copy.deepcopy(past_key_values)
         original_past_key_values_case = copy.deepcopy(past_key_values)
         output_hidden_states = True
         outputs_all = []
-        if False:
-            attention_mask = self.get_image_attention_mask(None, attention_mask, method="agressive")
         outputs = self.language_model(
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -511,7 +511,6 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        print("original en, ve:", self.calculate_entropy_varentropy(outputs['logits']), "token:", self.processor.decode(torch.argmax(outputs['logits'][0][-1])))
         attention_mask = restore_attention_mask(attention_mask)
         outputs_all.append(outputs)
         logits = outputs['logits']
@@ -519,171 +518,44 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             self.int_array = []
             # 第一次生成，需要记录image feature
             self.image_features = self.get_image_features(self.start_image_pos, self.end_image_pos, outputs)
+            vision_token_logits = self.get_image_logits(logits=logits, start_image_pos=self.start_image_pos[0],
+                                                        end_image_pos=self.end_image_pos[0])
+            self.vision_uncert_dict = self.calculate_vision_uncertainty(vision_token_logits)
             # write decoded image_features[1] to a file
-            with open("image_features.json", "w") as f:
-                json.dump(self.processor.batch_decode(self.image_features[1][0]), f)
-        max_vote = True
-        VQA = False
-        if VQA:
-            # outputs_all = [] # refresh outputs_all
-            data = input_ids[0]
-            indices_32000 = (data == 736).nonzero(as_tuple=True)[0]
-            if indices_32000.numel() > 0:
-                # 获取第一个出现的 32000 的位置
-                index_32000 = indices_32000[0].item()
-
-                # 提取 32000 之后的所有元素
-                elements_after_32000 = data[index_32000 + 1:]
-
-                # 将提取的元素转换为 CPU 上的 numpy 数组（如果需要在 CPU 上处理）
-                self.int_array = elements_after_32000.cpu().numpy()
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.6,[self.int_array[1]])
-            outputs_r = self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values1,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            attention_mask = restore_attention_mask(attention_mask)
-            outputs_all.append(outputs_r)
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.4,[self.int_array[1]])
-            outputs_r1 = self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values2,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            outputs_all.append(outputs_r1)
-            attention_mask = restore_attention_mask(attention_mask)
-            attention_mask = self.get_image_attention_mask(logits,attention_mask,"VQA",0.2,[self.int_array[1]])
-            outputs_r2 = self.language_model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=original_past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            outputs_all.append(outputs_r2)
-            outputs_r = select_by_vote(outputs_all)
+            # with open("/home/fyx/hallucination/image_features_out.json", "w") as f:
+            #     for i in range(self.image_features[1].shape[1]):
+            #         # Decode the i-th token.
+            #         token = self.processor.batch_decode(self.image_features[1][0][i].unsqueeze(0))
+            #         # Get the corresponding variance value.
+            #         variance_value = self.vision_uncert_dict["variance_per_token"][0][i]
+            #         # Get other fields from vision_uncert_dict.
+            #         epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0][i]
+            #         alea_uncert = self.vision_uncert_dict["alea_uncert_per_token"][0][i]
+            #
+            #         # Write the data to the file.
+            #         f.write(
+            #             f"Token {i + 1}: {token}, Variance: {variance_value}, Epis_Uncert: {epis_uncert}, Alea_Uncert: {alea_uncert}\n")
             loss = None
-            return LlavaNextCausalLMOutputWithPast(
-                loss=loss,
-                logits=outputs_r[0],
-                past_key_values=outputs_r.past_key_values,
-                hidden_states=outputs_r.hidden_states,
-                attentions=outputs_r.attentions,
-            )
-
-
+        max_vote = True
         if not self.is_first_generation:
             outputs_all = [] # refresh outputs_all
-            # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="all_image")
-            # outputs_noimg = self.language_model(
-            #     attention_mask=attention_mask,
-            #     position_ids=position_ids,
-            #     past_key_values=original_past_key_values1,
-            #     inputs_embeds=inputs_embeds,
-            #     use_cache=use_cache,
-            #     output_attentions=output_attentions,
-            #     output_hidden_states=output_hidden_states,
-            #     return_dict=return_dict,
-            # )
-            # logits_noimg = outputs_noimg[0]
-            attention_mask = restore_attention_mask(attention_mask)
-            # # 判断logits_noimg中最大的id是否与原来的生成相同
-            # if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
-            #     dangerous_text_part = True
-            # # 用处理后后的attention_mask进行生成
-            log_file = './case_study/results/0906.log'
-
-            # 假设self.processor.decode()会将传入的参数解码成相应的文本
-            # logits_noimg 和 logits 是你的 logits 张量
-
-            # if torch.argmax(logits_noimg[-1]) == torch.argmax(logits[-1]):
-            #     dangerous_text_part = True
-            dangerous_text_part = True
-            #     decoded_text = self.processor.decode(torch.argmax(logits[-1]))
-            #     with open(log_file, 'a') as f:  # 'a'模式表示追加写入
-            #         f.write(f"{decoded_text} ")
-            # else:
-            #     decoded_logits = self.processor.decode(torch.argmax(logits[-1]))
-            #     decoded_logits_noimg = self.processor.decode(torch.argmax(logits_noimg[-1]))
-            #     with open(log_file, 'a') as f:  # 'a'模式表示追加写入
-            #         f.write(f"{decoded_logits}({decoded_logits_noimg}) ")
-            # image and logits mask
-            if dangerous_text_part:
-                attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap")
-                # outputs_1 = self.language_model(
-                #     attention_mask=attention_mask,
-                #     position_ids=position_ids,
-                #     past_key_values=original_past_key_values,
-                #     inputs_embeds=inputs_embeds,
-                #     use_cache=use_cache,
-                #     output_attentions=output_attentions,
-                #     output_hidden_states=output_hidden_states,
-                #     return_dict=return_dict,
-                # )
-                # # 尝试保留attention_mask
-                # # attention_mask = restore_attention_mask(attention_mask)
-                # outputs_all.append(outputs_1)
-                # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
-                outputs_logits = self.language_model(
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=original_past_key_values2,
-                    inputs_embeds=inputs_embeds,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
-                    return_dict=return_dict,
+            probs = [0.3,0.5,0.7]
+            for prob in probs:
+                original_past_key_values_ = copy.deepcopy(original_past_key_values)
+                attention_mask = restore_attention_mask(attention_mask)
+                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="epis", prob=prob)
+                outputs_all.append(
+                    self.language_model(
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        past_key_values=original_past_key_values_,
+                        inputs_embeds=inputs_embeds,
+                        use_cache=use_cache,
+                        output_attentions=output_attentions,
+                        output_hidden_states=output_hidden_states,
+                        return_dict=return_dict,
+                    )
                 )
-                outputs_all.append(outputs_logits)
-                
-                if max_vote:
-                    attention_mask = restore_attention_mask(attention_mask)
-                    attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap", prob=0.3)
-                    # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
-                    outputs_all.append(
-                        self.language_model(
-                            attention_mask=attention_mask,
-                            position_ids=position_ids,
-                            past_key_values=original_past_key_values,
-                            inputs_embeds=inputs_embeds,
-                            use_cache=use_cache,
-                            output_attentions=output_attentions,
-                            output_hidden_states=output_hidden_states,
-                            return_dict=return_dict,
-                        )
-                    )
-                    attention_mask = restore_attention_mask(attention_mask)
-                    attention_mask = self.get_image_attention_mask(logits, attention_mask,method="keep_overlap", prob=0.7)
-                    # attention_mask = self.get_image_attention_mask(logits, attention_mask, method="logits")
-                    outputs_all.append(
-                        self.language_model(
-                            attention_mask=attention_mask,
-                            position_ids=position_ids,
-                            past_key_values=original_past_key_values1,
-                            inputs_embeds=inputs_embeds,
-                            use_cache=use_cache,
-                            output_attentions=output_attentions,
-                            output_hidden_states=output_hidden_states,
-                            return_dict=return_dict,
-                        )
-                    )
-
-
-
             loss = None
             # find the max logit in outputs_all and choose it
             # choose the sharpest logit distribution 
@@ -704,7 +576,6 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                         outputs_r = i
             if max_vote:
                 outputs_r = select_by_vote(outputs_all)
-            print("maxvote en, ve:", self.calculate_entropy_varentropy(outputs_r['logits']),"token:", self.processor.decode(torch.argmax(outputs_r['logits'][0][-1])))
             self.logits_mask_prob.append(1/torch.max(outputs_r[0][-1]).item())
             return LlavaNextCausalLMOutputWithPast(
                 loss=loss,
@@ -713,69 +584,8 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 hidden_states=outputs.hidden_states,
                 attentions=outputs.attentions,
             )
-
-        # raise EarlyExitException("Early exit triggered", outputs)
-        # logits = outputs[0]
-        # return outputs
         loss = None
-        if labels is not None:
-            # Shift so that tokens < n predict n
-            if attention_mask is not None:
-                shift_attention_mask = attention_mask[..., 1:]
-                shift_logits = logits[..., :-1, :][shift_attention_mask.to(logits.device) != 0].contiguous()
-                shift_labels = labels[..., 1:][shift_attention_mask.to(labels.device) != 0].contiguous()
-            else:
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = torch.nn.CrossEntropyLoss()
-            loss = loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1).to(shift_logits.device)
-            )
-
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
         self.logits_mask_prob.append(1/torch.max(logits[-1][-1]).item())
-        
-        # ------------- begin manual mask --------------- #ß
-        if self.do_step and self.skip_steps == 0 and None:
-            mem_original_past_key_values_case = copy.deepcopy(original_past_key_values_case)
-            while True:
-                print("current generate token: \"", self.processor.decode(torch.argmax(logits[-1][-1]).item()), "\"", "logit value:", torch.max(logits[-1]).item())
-                for i in range(len(self.all_outputs)):
-                    print(self.all_outputs[i][1], "(", self.all_outputs[i][0], i, ")", end=" ")
-                print()
-                mask_arrary = self.get_input(len(self.all_outputs)-1)
-                if len(mask_arrary) == 0:
-                    
-                    break
-                if mask_arrary[0] == -1:
-                    attention_mask[0, self.start_image_pos[0]:self.end_image_pos[0]+1] = 0
-                else :
-                    for i in range(len(mask_arrary)):
-                        attention_mask[:, mask_arrary[i] + self.start_generation_pos] = 0
-                
-                original_past_key_values_case = copy.deepcopy(mem_original_past_key_values_case)
-                outputs = self.language_model(
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=original_past_key_values_case,
-                    inputs_embeds=inputs_embeds,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
-                    return_dict=return_dict,
-                )
-                logits = outputs['logits']
-                attention_mask = restore_attention_mask(attention_mask)
-        if self.skip_steps > 0:
-            self.skip_steps -= 1
-                
-        self.all_outputs.append((torch.max(logits[-1][-1]).item(), self.processor.decode(torch.argmax(logits[-1][-1]).item(), skip_special_tokens=False)))
-        # ------------- end manual mask --------------- #
-        
-        
         return LlavaNextCausalLMOutputWithPast(
             loss=loss,
             logits=logits,
@@ -834,7 +644,7 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         logits = outputs['logits']
         # print(start_image_pos, end_image_pos)
         image_logits = self.get_image_logits(logits=logits, start_image_pos=start_image_pos[0], end_image_pos=end_image_pos[0])
-        values, ids = self.get_topk_token_id(image_logits, topk=6)
+        values, ids = self.get_topk_token_id(image_logits, topk=10)
         image_features = (values, ids)
         return image_features
     
@@ -961,6 +771,57 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 random_num = torch.rand(1)
                 if random_num < 0.2:
                     attention_mask[:, i] = 0
+        elif method== "epis":
+            # matched_indices = self.get_overlap_image_tokens(logits)
+            # adjusted_indices_tensor = matched_indices.clone().detach()
+            # epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"]
+            # indexes = torch.where(epis_uncert[0] < 1)[0]
+            # random_tensor = torch.rand_like(indexes.float())
+            # # depend on epis score mask least percent
+            # # uniform
+            # # compare mask method whatever performance
+            # mask = random_tensor <= prob
+            # filtered_indexes = indexes[mask]
+            # attention_mask[:,filtered_indexes+self.start_image_pos[0]] = 0
+            # attention_mask[:, adjusted_indices_tensor] = 1
+
+            matched_indices = self.get_overlap_image_tokens(logits)
+            adjusted_indices_tensor = matched_indices.clone().detach()
+            # epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
+            #
+            # # 1. 计算 `epis_uncert` 的 `prob` 百分位数阈值
+            # threshold = torch.quantile(epis_uncert, prob)
+            #
+            # # 2. 获取小于或等于该阈值的索引
+            # indexes = torch.where(epis_uncert >= threshold)[0]
+            #
+            # # 3. 设置 `attention_mask` 中 `filtered_indexes` 的位置为 0
+            # attention_mask[:, indexes + self.start_image_pos[0]] = 0
+            # attention_mask[:, adjusted_indices_tensor] = 1
+
+            epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
+
+            # 获取 epis_uncert 的 0.1 和 0.7 分位数
+            q_low = torch.quantile(epis_uncert, 0)
+            q_high = torch.quantile(epis_uncert, 1)
+
+            # 使用线性插值将 epis_uncert 映射到 [0.1, 0.7] 范围
+            # clamp 是为了确保数据在分位数范围内，并进行插值
+            normalized_probs = 0.1 + (prob - 0.1) * (epis_uncert.clamp(min=q_low, max=q_high) - q_low) / (
+                    q_high - q_low)
+
+            # 生成与 epis_uncert 相同形状的随机张量
+            random_tensor = torch.rand_like(epis_uncert)
+
+            # 根据生成的随机张量与 normalized_probs 确定 mask
+            mask = random_tensor < normalized_probs
+            filtered_indexes = torch.where(mask)[0]
+
+            # 设置 attention_mask 中的指定位置为 0
+            attention_mask[:, filtered_indexes + self.start_image_pos[0]] = 0
+
+            # 恢复 attention_mask 的某些索引为 1
+            attention_mask[:, adjusted_indices_tensor] = 1
 
         return attention_mask
     
@@ -1008,242 +869,52 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
             except ValueError:
                 print("Invalid input. Please enter an integer.")
 
-    def calculate_entropy_varentropy(self, logits) -> (float, float):
+
+    def calculate_vision_uncertainty(self, logits):
         """
-        Calculate the entropy and varentropy of the probability distribution using log_softmax.
+        Calculate various metrics for a distribution over tokens (Specificity, only vision tokens).
 
         Args:
-            logits (torch.Tensor): Input tensor of logits with shape [vocab_size].
+        logits (torch.Tensor): Input tensor of shape [B, L_vision, V] where B is batch size,
+                            L_vision is sequence length of vision tokens, and V is vocabulary size.
 
         Returns:
-            entropy (float): The calculated entropy.
-            varentropy (float): The calculated varentropy.
+        dict: A dictionary containing the calculated metrics.
         """
-        # Calculate log probabilities using log_softmax
-        log_probs = F.log_softmax(logits, dim=-1)
-        probs = torch.exp(log_probs)
+        # Convert logits to probabilities
+        probs = F.softmax(logits, dim=-1)  # [B, L, V]
 
-        # Calculate entropy in base-2
-        entropy = -torch.sum(probs * log_probs) / math.log(2)
+        # 1. Expected value for each position
+        expected_values = torch.mean(probs, dim=-1)  # [B, L]
 
-        # Calculate varentropy
-        varentropy = torch.sum(probs * (log_probs / math.log(2) + entropy) ** 2)
+        # 2. Variance for each position
+        variance_per_token = torch.var(probs, dim=-1)  # [B, L]
+        variance = torch.mean(variance_per_token, dim=-1)
 
-        return entropy.item(), varentropy.item()
+        # 3. Average distribution over V
+        p_avg = torch.mean(probs, dim=1)  # [B, V]
 
+        # 4. Positional uncertainty (Epistemic)
+        epi_per_token = torch.sum(probs * (torch.log(probs + 1e-10) - torch.log(p_avg.unsqueeze(1) + 1e-10)),
+                                  dim=-1)  # [B, L]
 
-import torch.nn.functional as F
-def calculate_cosine_similarity(inputs_embeds, all_embeddings, batch_size=24):
-    """
-    计算输入嵌入与所有嵌入之间的余弦相似度。
+        # 5. Positional entropy (Aleatoric)
+        alea_per_token = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1)  # [B, L]
 
-    参数:
-    - inputs_embeds: 输入嵌入，形状为 [1, L, D]
-    - all_embeddings: 所有嵌入，形状为 [V, D]
-    - batch_size: 批处理大小
+        # -------------------------------
+        # for traj(image)-level uncertainty, please take expectation over L_vision
+        epistemic_uncertainty = torch.mean(epi_per_token, dim=-1)  # [B]
+        aleatoric_uncertainty = torch.mean(alea_per_token, dim=-1)  # [B]
+        # -------------------------------
 
-    返回:
-    - cosine_sim: 余弦相似度矩阵，形状为 [L, filtered_V]
-    - original_token_ids: 过滤后的原始token ID
-    """
-    inputs_embeds = inputs_embeds.squeeze(0)  # 变成 [L, D]
-    L, D = inputs_embeds.shape
-    V = all_embeddings.shape[0]
+        return {
+            # "expected_values": expected_values,
+            "variance_per_token": variance_per_token,
+            # "p_avg": p_avg,
+            "epis_uncert_per_token": epi_per_token,
+            "alea_uncert_per_token": alea_per_token,
+            "variance": variance,
+            "epis_uncert": epistemic_uncertainty,
+            "alea_uncert": aleatoric_uncertainty
+        }
 
-    # 找到全零向量的索引
-    zero_vector_indices = (all_embeddings == 0).all(dim=1)
-    # 过滤掉全零向量
-    filtered_embeddings = all_embeddings[~zero_vector_indices]
-    filtered_V = filtered_embeddings.shape[0]
-
-    # 创建一个空的张量来存储结果
-    cosine_sim = torch.empty((L, filtered_V), device=inputs_embeds.device)
-
-    # 分批处理
-    for start in range(0, L, batch_size):
-        end = min(start + batch_size, L)
-        inputs_batch = inputs_embeds[start:end]  # 形状为 [batch_size, D]
-
-        # 计算当前批次与 filtered_embeddings 的余弦相似度
-        batch_cosine_sim = F.cosine_similarity(
-            inputs_batch.unsqueeze(1),  # 变成 [batch_size, 1, D]
-            filtered_embeddings.unsqueeze(0),  # 变成 [1, filtered_V, D]
-            dim=-1
-        )  # 得到的形状为 [batch_size, filtered_V]
-
-        # 将结果存储在预先分配的张量中
-        cosine_sim[start:end] = batch_cosine_sim
-
-    # 映射回原始的 token ids
-    original_token_ids = torch.arange(V, device=inputs_embeds.device)[~zero_vector_indices]
-
-    return cosine_sim, original_token_ids
-
-
-  
-
-import json
-def interpret_top_k_tokens(name, cosine_sim, original_token_ids, processor, k=5):
-    """
-    解释得到的Top-K token，并记录对应的余弦相似度值。
-
-    参数:
-    - cosine_sim: 余弦相似度矩阵，形状为 [L, filtered_V]
-    - original_token_ids: 过滤后的原始token ID
-    - processor: 包含tokenizer的处理器
-    - k: Top-K的值
-
-    返回:
-    - sentences: 解释后的句子列表
-    """
-    # 获取最相似的 token ids 和其对应的余弦相似度值的前 K 个
-    top_k_values, top_k_indices = torch.topk(cosine_sim, k, dim=-1)
-
-    # 映射回原始的 token ids
-    top_k_token_ids = original_token_ids[top_k_indices]
-
-    # 将 token ids 和对应的余弦相似度值转换为字符串并记录
-    top_k_tokens_with_scores = [
-        [{"token": processor.tokenizer.convert_ids_to_tokens([token_id.item()])[0], "cosine_similarity": value.item()}
-         for token_id, value in zip(token_ids, values)]
-        for token_ids, values in zip(top_k_token_ids, top_k_values)
-    ]
-
-    # 将结果保存到JSON文件中
-    with open(name, "w") as f:
-        json.dump(top_k_tokens_with_scores, f, indent=2)
-
-    # # 转换为句子
-    # sentences = [processor.tokenizer.convert_tokens_to_string(
-    #     [item["token"] for item in token_list]) for token_list in top_k_tokens_with_scores]
-
-    # return sentences
-    return
-
-def output_to_top_k_tokens(outputs, tokenizer, file_name, k=5):
-    logits = outputs['logits']  # torch.Size([1, 1044, 32064])
-
-    # Step 1: 对 logits 进行 softmax 操作
-    probs = F.softmax(logits, dim=-1)  # torch.Size([1, 1044, 32064])
-
-    # Step 2: 使用 torch.topk 提取每个位置上的 top-k tokens 及其概率
-    top_k_probs, top_k_indices = torch.topk(probs, k, dim=-1)  # top_k_probs: torch.Size([1, 1044, 5]), top_k_indices: torch.Size([1, 1044, 5])
-
-    # Step 3: 使用 tokenizer 将 token IDs 转换为文本
-    batch_size, seq_len, _ = top_k_probs.size()
-    results = []
-
-    for i in range(batch_size):
-        seq_results = []
-        for j in range(seq_len):
-            token_results = []
-            token_texts = tokenizer.convert_ids_to_tokens(top_k_indices[i, j].tolist())
-            for l in range(k):
-                token_results.append({
-                    "token": token_texts[l],
-                    "prob": top_k_probs[i, j, l].item()
-                })
-            seq_results.append(token_results)
-        results.append(seq_results)
-
-    # 将结果写入文件
-    with open(file_name, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
-
-
-
-def inspect_decode(all_embeddings, processor, early_exit_output):
-    final_embedding = early_exit_output['final_embedding'] # [B, L, D]
-    text_to_overwrite = early_exit_output['text_to_overwrite']
-    image_to_overwrite = early_exit_output['image_to_overwrite']
-    inputs_embeds = final_embedding
-
-    # 假设 inputs_embeds 的形状为 [1, L, D]，all_embeddings 的形状为 [V, D]
-    inputs_embeds = inputs_embeds.squeeze(0)  # 变成 [L, D]
-    L, D = inputs_embeds.shape
-    V = all_embeddings.shape[0]
-
-    # 找到全零向量的索引
-    zero_vector_indices = (all_embeddings == 0).all(dim=1)
-    # 过滤掉全零向量
-    filtered_embeddings = all_embeddings[~zero_vector_indices]
-    filtered_V = filtered_embeddings.shape[0]
-
-    # 设置一个批处理大小，以避免 CUDA OOM
-    batch_size = 24
-
-    # 创建一个空的张量来存储结果
-    cosine_sim = torch.empty((L, filtered_V), device=inputs_embeds.device)
-
-    # 分批处理
-    for start in range(0, L, batch_size):
-        end = min(start + batch_size, L)
-        inputs_batch = inputs_embeds[start:end]  # 形状为 [batch_size, D]
-
-        # 计算当前批次与 filtered_embeddings 的余弦相似度
-        batch_cosine_sim = F.cosine_similarity(
-            inputs_batch.unsqueeze(1),  # 变成 [batch_size, 1, D]
-            filtered_embeddings.unsqueeze(0),  # 变成 [1, filtered_V, D]
-            dim=-1
-        )  # 得到的形状为 [batch_size, filtered_V]
-
-        # 将结果存储在预先分配的张量中
-        cosine_sim[start:end] = batch_cosine_sim
-
-    # 获取最相似的 token ids
-    filtered_token_ids = torch.argmax(cosine_sim, dim=-1)
-
-    # 映射回原始的 token ids
-    original_token_ids = torch.arange(V, device=inputs_embeds.device)[~zero_vector_indices]
-    token_ids = original_token_ids[filtered_token_ids]
-
-    # 将 token ids 转换为字符串
-    tokens = processor.tokenizer.convert_ids_to_tokens(token_ids.squeeze().tolist())
-    sentence = processor.tokenizer.convert_tokens_to_string(tokens)
-
-    print(sentence)
-    return sentence
-
-# import matplotlib.pyplot as plt
-import numpy as np
-import os
-
-def saveimg(image, variable_name):
-    # 生成保存路径
-    save_path = os.path.join('tmp', f'{variable_name}.png')
-    
-    # 保存图片
-    plt.imsave(save_path, image)
-
-# if __name__ == "__main__":
-#     model_path = "/data3/fyx/llava-v1.6-mistral-7b-hf"
-#     processor = LlavaNextProcessor.from_pretrained(model_path)
-
-#     device = 'cuda:3'
-#     model = CustomLlavaNextForConditionalGeneration.from_pretrained(
-#         model_path,
-#         torch_dtype=torch.float16, 
-#         device_map = device
-#         # low_cpu_mem_usage=True,
-#         # load_in_4bit=True
-#     )
-#     use_input_embeddings = False
-
-    # for index in range(1):
-    #     img_path = f"/home/fyx/vlm_images/COCO_val2014_000000012443.jpg"
-    #     image = Image.open(img_path)
-    #     prompt = "[INST] <image>\nWhat is shown in this image? [/INST]"
-
-    #     # ------------------------------------
-    #     globals()['processor'] = processor
-    #     inputs = processor(prompt, image, return_tensors="pt").to(device)
-    #     # try:
-    #     #     early_exit_output = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=use_input_embeddings)
-    #     # except EarlyExitException as e:
-    #     #     early_exit_output = e.early_exit_output
-    #     output_ids = model.generate(**inputs, max_new_tokens=100, use_input_embeddings=use_input_embeddings)
-    #     output = processor.batch_decode(output_ids, skip_special_tokens=True)
-    #     # ------------------------------------
-
-        
-        

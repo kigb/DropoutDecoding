@@ -1,4 +1,4 @@
-name: vlm
+name: udgv
 channels:
   - conda-forge
   - defaults
