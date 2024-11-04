@@ -254,7 +254,10 @@ def main(args):
         image_path = os.path.join(args.coco_data_dir, "val2014", img_file)
         image = load_image(image_path)
         prompt = prompt_dict[args.model]
-        inputs = processor(prompt, image, return_tensors="pt").to(device)
+        if args.model=='instructblip':
+            inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
+        else:
+            inputs = processor(prompt, image, return_tensors="pt").to(device)
         if args.original is True:
             output_ids = model.generate(**inputs, max_new_tokens=512,
                                         num_beams=1,
