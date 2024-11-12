@@ -53,9 +53,9 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        voting_numbers: Optional[int] = None,
+        # voting_numbers: Optional[int] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        print(voting_numbers)
+        # print(voting_numbers)
         global start_img_pos
         global end_img_pos
         global start_generation_pos

@@ -167,8 +167,8 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
-            voting_numbers: Optional[int] = 3,
-            **kwargs,
+            # voting_numbers: Optional[int] = 3,
+            # **kwargs,
     ) -> Union[Tuple, LlavaCausalLMOutputWithPast]:
         r"""
         Args:
@@ -200,7 +200,7 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
         >>> processor.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "USER:  \nWhat's the content of the image? ASSISTANT: The image features a busy city street with a stop sign prominently displayed"
         ```"""
-        print("settings", settings)
+        # print("settings", settings)
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (

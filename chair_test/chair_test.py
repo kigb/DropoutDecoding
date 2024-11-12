@@ -278,7 +278,7 @@ def main(args):
                                         )
         else:
             output_ids = model.generate(**inputs, max_new_tokens=512, num_beams=1,
-                                        pad_token_id=processor.tokenizer.eos_token_id, voting_numbers=1)
+                                        pad_token_id=processor.tokenizer.eos_token_id)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
         if args.model == 'llava-1.5':
             output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
