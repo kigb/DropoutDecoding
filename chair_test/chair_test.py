@@ -21,6 +21,7 @@ from PIL import Image
 from io import BytesIO
 from collections import defaultdict
 from chair_test.chair_metrics import chair
+from models.config import settings
 prompt_dict = {}
 prompt_dict['llava-1.5'] = "USER: <image>\nDescribe the image. ASSISTANT:"
 prompt_dict['instructblip'] = "Describe the image."
@@ -137,6 +138,19 @@ def chair_eval(chair_input_path, model_type, num_images, output_dir, dataset_nam
 
 def main(args):
     # load model
+    if args.voting_numbers == 1:
+        settings['voting_numbers'] = [0.5]
+    elif args.voting_numbers == 2:
+        settings['voting_numbers'] = [0.3,0.5]
+    elif args.voting_numbers == 3:
+        pass
+    elif args.voting_numbers == 4:
+        settings['voting_numbers'] = [0.1, 0.3, 0.5, 0.7]
+    elif args.voting_numbers == 5:
+        settings['voting_numbers'] = [0.1, 0.3, 0.5, 0.7, 0.9]
+    else:
+        print("unsupport voting number, this should be from 1 to 5 and will be set to 3 by default")
+    settings['use_avg'] = args.avg
     model_path = args.model_path
     processor = AutoProcessor.from_pretrained(model_path)
     device = f'cuda:{args.gpu_id}'
@@ -264,7 +278,7 @@ def main(args):
                                         )
         else:
             output_ids = model.generate(**inputs, max_new_tokens=512, num_beams=1,
-                                        pad_token_id=processor.tokenizer.eos_token_id)
+                                        pad_token_id=processor.tokenizer.eos_token_id, voting_numbers=1)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
         if args.model == 'llava-1.5':
             output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
@@ -383,5 +397,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default='llava-1.5')
     parser.add_argument("--coco-data-dir",required=True, type=str, default=None)
     parser.add_argument("--model-path",required=True, type=str, default=None)
+    parser.add_argument("--avg", type=bool, default=False)
+    parser.add_argument("--voting-numbers", type=int, default=3)
     args = parser.parse_args()
     main(args)

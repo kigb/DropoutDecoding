@@ -8,11 +8,13 @@ from transformers.models.llava.modeling_llava import LlavaCausalLMOutputWithPast
 import torch.nn.functional as F
 import math
 from collections import Counter
+from models.config import settings
+
 import numpy as np
 # seed = 24
 # seed = 650
-# seed = 24
-seed = 5217
+seed = 24
+# seed = 5217
 torch.manual_seed(seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(seed)
@@ -165,6 +167,8 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
+            voting_numbers: Optional[int] = 3,
+            **kwargs,
     ) -> Union[Tuple, LlavaCausalLMOutputWithPast]:
         r"""
         Args:
@@ -196,6 +200,7 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
         >>> processor.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "USER:  \nWhat's the content of the image? ASSISTANT: The image features a busy city street with a stop sign prominently displayed"
         ```"""
+        print("settings", settings)
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -313,26 +318,26 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
         # ------------------------------------------------------------
 
         # ------------------------------------------------------------
-        # with open("/home/fyx/hallucination/image_features_out.json", "w") as f:
-        #     for i in range(self.image_features[1].shape[1]):
-        #         # Decode the i-th token.
-        #         token = self.processor.batch_decode(self.image_features[1][0][i].unsqueeze(0))
-        #         # Get the corresponding variance value.
-        #         variance_value = vision_uncert_dict["variance_per_token"][0][i]
-        #         # Get other fields from vision_uncert_dict.
-        #         epis_uncert = vision_uncert_dict["epis_uncert_per_token"][0][i]
-        #         alea_uncert = vision_uncert_dict["alea_uncert_per_token"][0][i]
+        #     with open("/home/fyx/hallucination/image_features_out.json", "w") as f:
+        #         for i in range(self.image_features[1].shape[1]):
+        #             # Decode the i-th token.
+        #             token = self.processor.batch_decode(self.image_features[1][0][i].unsqueeze(0))
+        #             # Get the corresponding variance value.
+        #             variance_value = self.vision_uncert_dict["variance_per_token"][0][i]
+        #             # Get other fields from vision_uncert_dict.
+        #             epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0][i]
+        #             alea_uncert = self.vision_uncert_dict["alea_uncert_per_token"][0][i]
         #
-        #         # Write the data to the file.
-        #         f.write(
-        #             f"Token {i + 1}: {token}, Variance: {variance_value}, Epis_Uncert: {epis_uncert}, Alea_Uncert: {alea_uncert}\n")
+        #             # Write the data to the file.
+        #             f.write(
+        #                 f"Token {i + 1}: {token}, Variance: {variance_value}, Epis_Uncert: {epis_uncert}, Alea_Uncert: {alea_uncert}\n")
         loss = None
         max_vote = True
-        # if not self.is_first_generation:
-        if True:
+        if not self.is_first_generation:
+        # if True:
             self.masked_numbers = []
-            # outputs_all = []
-            probs = [0.3,0.5,0.7]
+            outputs_all = []
+            probs = settings['voting_numbers']
             method_ = "logits"
             for mprob in probs:
                 original_past_key_values_ = copy.deepcopy(original_past_key_values)
@@ -353,9 +358,11 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
                     return_dict=return_dict,
                 ))
 
-            if max_vote:
+            if settings['use_avg'] is False:
                 outputs_r,index = select_by_vote(outputs_all)
-                # outputs_r = select_by_average(outputs_all)
+            else:
+                outputs_r = select_by_average(outputs_all)
+                # print("avg")
                 # with open("/home/fyx/hallucination/tmp/llava_masked_numbers.log", "a") as file:
                 #     file.write(f"{self.masked_numbers[index]},")
 
@@ -596,8 +603,8 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
             # attention_mask[:,filtered_indexes+self.start_image_pos[0]] = 0
             # attention_mask[:, adjusted_indices_tensor] = 1
 
-            # matched_indices = self.get_overlap_image_tokens(logits)
-            # adjusted_indices_tensor = matched_indices.clone().detach()
+            matched_indices = self.get_overlap_image_tokens(logits)
+            adjusted_indices_tensor = matched_indices.clone().detach()
 
             # epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
             #
@@ -653,31 +660,30 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
             attention_mask[:, filtered_indexes + self.start_image_pos[0]] = 0
 
             # 恢复 attention_mask 的某些索引为 1
-            # attention_mask[:, adjusted_indices_tensor] = 1
+            attention_mask[:, adjusted_indices_tensor] = 1
             zero_count = (attention_mask[0] == 0).sum().item()
             self.masked_numbers.append(zero_count)
-        elif method == "epis_kl":
+        elif method == "epis_no_overlap":
             epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
 
-            # 获取 epis_uncert 的分位数
+            # 获取 epis_uncert 的 0.1 和 0.7 分位数
             q_low = torch.quantile(epis_uncert, 0)
             q_high = torch.quantile(epis_uncert, 1)
 
+            # 使用线性插值将 epis_uncert 映射到 [0.1, 0.7] 范围
             # clamp 是为了确保数据在分位数范围内，并进行插值
             normalized_probs = 0.1 + (prob - 0.1) * (epis_uncert.clamp(min=q_low, max=q_high) - q_low) / (
-                    q_high - q_low)
+                        q_high - q_low)
+
             # 生成与 epis_uncert 相同形状的随机张量
             random_tensor = torch.rand_like(epis_uncert)
 
             # 根据生成的随机张量与 normalized_probs 确定 mask
             mask = random_tensor < normalized_probs
             filtered_indexes = torch.where(mask)[0]
-
+            
             # 设置 attention_mask 中的指定位置为 0
             attention_mask[:, filtered_indexes + self.start_image_pos[0]] = 0
-            lowest_kls = self.lowest_percent_kl_indices(self.image_logits, logits)
-            lowest_kls_indices = (lowest_kls + self.start_image_pos[0]).tolist()  # 转换为 Python 列表
-            attention_mask[:,lowest_kls_indices] = 1
 
         return attention_mask
 

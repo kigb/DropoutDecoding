@@ -10,8 +10,9 @@ from torch.nn import CrossEntropyLoss
 from transformers import LlamaForCausalLM, Cache
 from transformers.modeling_outputs import CausalLMOutputWithPast
 import torch.nn.functional as F
-
+from models.config import settings
 from models.llavanext import select_by_vote
+from models.llava import select_by_average
 # seed = 1141
 seed = 5217
 # seed = 650
@@ -52,7 +53,9 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        voting_numbers: Optional[int] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+        print(voting_numbers)
         global start_img_pos
         global end_img_pos
         global start_generation_pos
@@ -111,7 +114,7 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
 
         if self.first_generation is not True:
             outputs_all = []
-            mask_probs = [0.3,0.5,0.7]
+            mask_probs = settings['voting_numbers']
             text_mask_method = "logits"
             for mprob in mask_probs:
                 original_past_key_values_ = copy.deepcopy(original_past_key_values)
@@ -131,7 +134,10 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
                     return_dict=return_dict,
                     cache_position=cache_position,
                 ))
-            outputs_r = select_by_vote(outputs_all)
+            if settings['use_avg'] is False:
+                outputs_r = select_by_vote(outputs_all)
+            else:
+                outputs_r = select_by_average(outputs_all)
             hidden_states = outputs_r[0]
             logits = self.lm_head(hidden_states)
             logits = logits.float()
@@ -422,28 +428,42 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
             # # 6. Restore attention for matched indices to 1
             # attention_mask[:, adjusted_indices_tensor] = 1
             # 假设 epis_uncert 是你的输入张量
+            # epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
+            #
+            # # 获取 epis_uncert 的分位数
+            # q_low = torch.quantile(epis_uncert, 0)
+            # q_high = torch.quantile(epis_uncert, 1)
+            #
+            #
+            # # clamp 是为了确保数据在分位数范围内，并进行插值
+            # normalized_probs = 0.1 + (prob-0.1) * (epis_uncert.clamp(min=q_low, max=q_high) - q_low) / (q_high - q_low)
+            #
+            # # 生成与 epis_uncert 相同形状的随机张量
+            # random_tensor = torch.rand_like(epis_uncert)
+            #
+            # # 根据生成的随机张量与 normalized_probs 确定 mask
+            # mask = random_tensor < normalized_probs
+            # filtered_indexes = torch.where(mask)[0]
+            #
+            # # 设置 attention_mask 中的指定位置为 0
+            # attention_mask[:, filtered_indexes + self.start_image_pos[0]] = 0
             epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
 
-            # 获取 epis_uncert 的分位数
-            q_low = torch.quantile(epis_uncert, 0)
-            q_high = torch.quantile(epis_uncert, 1)
+            # Step 1: Determine the threshold value for the top `prob` proportion
+            threshold = torch.quantile(epis_uncert, 1 - prob)
 
-
-            # clamp 是为了确保数据在分位数范围内，并进行插值
-            normalized_probs = 0.1 + (prob-0.1) * (epis_uncert.clamp(min=q_low, max=q_high) - q_low) / (q_high - q_low)
-
-            # 生成与 epis_uncert 相同形状的随机张量
-            random_tensor = torch.rand_like(epis_uncert)
-
-            # 根据生成的随机张量与 normalized_probs 确定 mask
-            mask = random_tensor < normalized_probs
+            # Step 2: Create a mask that identifies tokens with epis_uncert values in the top `prob` proportion
+            mask = epis_uncert >= threshold
             filtered_indexes = torch.where(mask)[0]
 
-            # 设置 attention_mask 中的指定位置为 0
+            # Step 3: Set specified positions in attention_mask to 0 based on the mask
             attention_mask[:, filtered_indexes + self.start_image_pos[0]] = 0
 
-            # 恢复 attention_mask 的某些索引为 1
+            # Step 4: Restore specific indices in attention_mask to 1, if needed
             attention_mask[:, adjusted_indices_tensor] = 1
+
+            # # 恢复 attention_mask 的某些索引为 1
+            # attention_mask[:, adjusted_indices_tensor] = 1
         elif method=="epis_kl":
             epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
 
@@ -466,17 +486,17 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
             lowest_kls = self.lowest_percent_kl_indices(self.image_logits,logits)
             lowest_kls_indices = (lowest_kls + self.start_image_pos[0]).tolist()  # 转换为 Python 列表
             attention_mask[:,lowest_kls_indices] = 1
-        elif method== "epis_only":
-           
+        elif method == "epis_no_overlap":
             epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
 
-            # 获取 epis_uncert 的分位数
+            # 获取 epis_uncert 的 0.1 和 0.7 分位数
             q_low = torch.quantile(epis_uncert, 0)
             q_high = torch.quantile(epis_uncert, 1)
 
-
+            # 使用线性插值将 epis_uncert 映射到 [0.1, 0.7] 范围
             # clamp 是为了确保数据在分位数范围内，并进行插值
-            normalized_probs = 0.1 + (prob-0.1) * (epis_uncert.clamp(min=q_low, max=q_high) - q_low) / (q_high - q_low)
+            normalized_probs = 0.1 + (prob - 0.1) * (epis_uncert.clamp(min=q_low, max=q_high) - q_low) / (
+                        q_high - q_low)
 
             # 生成与 epis_uncert 相同形状的随机张量
             random_tensor = torch.rand_like(epis_uncert)
@@ -484,9 +504,11 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
             # 根据生成的随机张量与 normalized_probs 确定 mask
             mask = random_tensor < normalized_probs
             filtered_indexes = torch.where(mask)[0]
-
+            
             # 设置 attention_mask 中的指定位置为 0
             attention_mask[:, filtered_indexes + self.start_image_pos[0]] = 0
+
+        return attention_mask
         return attention_mask
 
     def calculate_vision_uncertainty(self, logits):
