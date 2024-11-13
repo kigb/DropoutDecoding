@@ -134,10 +134,7 @@ class CustomLlamaForCausalLM(LlamaForCausalLM):
                     return_dict=return_dict,
                     cache_position=cache_position,
                 ))
-            if settings['use_avg'] is False:
-                outputs_r = select_by_vote(outputs_all)
-            else:
-                outputs_r = select_by_average(outputs_all)
+            outputs_r = select_by_vote(outputs_all)
             hidden_states = outputs_r[0]
             logits = self.lm_head(hidden_states)
             logits = logits.float()

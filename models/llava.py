@@ -358,10 +358,7 @@ class CustomLlavaForConditionalGeneration(LlavaForConditionalGeneration):
                     return_dict=return_dict,
                 ))
 
-            if settings['use_avg'] is False:
-                outputs_r,index = select_by_vote(outputs_all)
-            else:
-                outputs_r = select_by_average(outputs_all)
+            outputs_r,index = select_by_vote(outputs_all)
                 # print("avg")
                 # with open("/home/fyx/hallucination/tmp/llava_masked_numbers.log", "a") as file:
                 #     file.write(f"{self.masked_numbers[index]},")
