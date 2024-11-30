@@ -2,6 +2,12 @@ dataset/*
 slurm/*
 scripts/**/*.slurm
 chair_test/__pycache__/
+transformers-4.44.0/
+outputs_ablations/
+outputs_ablations_additional/
+outputs_main_experiments/
+outputs_old/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

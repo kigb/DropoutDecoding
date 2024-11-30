@@ -7,11 +7,15 @@ import numpy as np
 from tqdm import tqdm
 from transformers import LlavaNextProcessor
 from models.llava import CustomLlavaForConditionalGeneration
-from transformers import LlavaForConditionalGeneration, \
-    AutoProcessor
+from transformers import LlavaForConditionalGeneration, AutoProcessor
 from transformers import InstructBlipProcessor, InstructBlipForConditionalGeneration
 from models.llavanext import CustomLlavaNextForConditionalGeneration
-from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration,LlavaForConditionalGeneration,AutoProcessor
+from transformers import (
+    LlavaNextProcessor,
+    LlavaNextForConditionalGeneration,
+    LlavaForConditionalGeneration,
+    AutoProcessor,
+)
 from models.instructblip import CustomInstructBlipForConditionalGeneration
 import torch
 from pycocotools.coco import COCO
@@ -22,23 +26,25 @@ from io import BytesIO
 from collections import defaultdict
 from chair_test.chair_metrics import chair
 from models.config import settings
+
 prompt_dict = {}
-prompt_dict['llava-1.5'] = "USER: <image>\nDescribe the image. ASSISTANT:"
-prompt_dict['instructblip'] = "Describe the image."
-prompt_dict['llava-next'] = "[INST] <image>\nDescribe the image. [/INST]"
+prompt_dict["llava-1.5"] = "USER: <image>\nDescribe the image. ASSISTANT:"
+prompt_dict["instructblip"] = "Describe the image."
+prompt_dict["llava-next"] = "[INST] <image>\nDescribe the image. [/INST]"
+
 
 def load_image(image_file):
-    if image_file.startswith('http://') or image_file.startswith('https://'):
+    if image_file.startswith("http://") or image_file.startswith("https://"):
         response = requests.get(image_file)
-        image = Image.open(BytesIO(response.content)).convert('RGB')
+        image = Image.open(BytesIO(response.content)).convert("RGB")
     else:
-        image = Image.open(image_file).convert('RGB')
+        image = Image.open(image_file).convert("RGB")
     return image
 
 
 def load_coco_data(data_dir):
-    annotation_file_path = os.path.join(data_dir,"annotations/instances_val2014.json")
-    caption_file_path = os.path.join(data_dir,"annotations/captions_val2014.json")
+    annotation_file_path = os.path.join(data_dir, "annotations/instances_val2014.json")
+    caption_file_path = os.path.join(data_dir, "annotations/captions_val2014.json")
     with open(annotation_file_path, "r") as f:
         lines = f.readlines()
     coco_anns = json.loads(lines[0])
@@ -46,7 +52,16 @@ def load_coco_data(data_dir):
     return coco, coco_anns
 
 
-def chair_eval(chair_input_path, model_type, num_images, output_dir, dataset_name, data_dir, metric, verbosity=False):
+def chair_eval(
+    chair_input_path,
+    model_type,
+    num_images,
+    output_dir,
+    dataset_name,
+    data_dir,
+    metric,
+    verbosity=False,
+):
     if verbosity:
         print("\nchair_input_path: ", chair_input_path)
 
@@ -91,16 +106,23 @@ def chair_eval(chair_input_path, model_type, num_images, output_dir, dataset_nam
     halc_caption_result = cap_dict["sentences"]
     halc_result = {}
     for i in halc_caption_result:
-        halc_result[i["image_id"]] = {"caption": i["caption"],
-                                      "cider": max(np.log10(i["metrics"]["CIDEr"]) + 20, 0),
-                                      "meteor": i["metrics"]["METEOR"],
-                                      "chairs": i["metrics"]["CHAIRs"],
-                                      "chairi": i["metrics"]["CHAIRi"],
-                                      "bleu": (i["metrics"]["Bleu_1"] + i["metrics"]["Bleu_2"] + i["metrics"][
-                                          "Bleu_3"] + i["metrics"]["Bleu_4"]) / 4,
-                                      "objects_num": len(i["mscoco_generated_words"]),
-                                      "words_num": len(i["words"]),
-                                      "hallucinate_num": len(i["hallucination_idxs"])}
+        halc_result[i["image_id"]] = {
+            "caption": i["caption"],
+            "cider": max(np.log10(i["metrics"]["CIDEr"]) + 20, 0),
+            "meteor": i["metrics"]["METEOR"],
+            "chairs": i["metrics"]["CHAIRs"],
+            "chairi": i["metrics"]["CHAIRi"],
+            "bleu": (
+                i["metrics"]["Bleu_1"]
+                + i["metrics"]["Bleu_2"]
+                + i["metrics"]["Bleu_3"]
+                + i["metrics"]["Bleu_4"]
+            )
+            / 4,
+            "objects_num": len(i["mscoco_generated_words"]),
+            "words_num": len(i["words"]),
+            "hallucinate_num": len(i["hallucination_idxs"]),
+        }
 
     # print(halc_result)
     cider_sum = 0
@@ -139,63 +161,53 @@ def chair_eval(chair_input_path, model_type, num_images, output_dir, dataset_nam
 def main(args):
     # load model
     if args.voting_numbers == 1:
-        settings['voting_numbers'] = [0.5]
+        settings["voting_numbers"] = [0.5]
     elif args.voting_numbers == 2:
-        settings['voting_numbers'] = [0.3,0.5]
+        settings["voting_numbers"] = [0.3, 0.5]
     elif args.voting_numbers == 3:
         pass
     elif args.voting_numbers == 4:
-        settings['voting_numbers'] = [0.1, 0.3, 0.5, 0.7]
+        settings["voting_numbers"] = [0.1, 0.3, 0.5, 0.7]
     elif args.voting_numbers == 5:
-        settings['voting_numbers'] = [0.1, 0.3, 0.5, 0.7, 0.9]
+        settings["voting_numbers"] = [0.1, 0.3, 0.5, 0.7, 0.9]
     else:
-        print("unsupport voting number, this should be from 1 to 5 and will be set to 3 by default")
-    settings['use_avg'] = args.avg
+        print(
+            "unsupport voting number, this should be from 1 to 5 and will be set to 3 by default"
+        )
+    settings["use_avg"] = args.avg
     model_path = args.model_path
     processor = AutoProcessor.from_pretrained(model_path)
-    device = f'cuda:{args.gpu_id}'
+    device = f"cuda:{args.gpu_id}"
     print("preparing generation")
-    if args.model == 'llava-1.5':
+    if args.model == "llava-1.5":
         if args.original is True:
             print("generating original")
             model = LlavaForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16,
-                device_map=device
+                model_path, torch_dtype=torch.float16, device_map=device
             )
         else:
             model = CustomLlavaForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16,
-                device_map=device
+                model_path, torch_dtype=torch.float16, device_map=device
             )
-    elif args.model=='instructblip':
+    elif args.model == "instructblip":
         if args.original is True:
             print("generating original")
             model = InstructBlipForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16,
-                device_map=device
+                model_path, torch_dtype=torch.float16, device_map=device
             )
         else:
             model = CustomInstructBlipForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16,
-                device_map=device
+                model_path, torch_dtype=torch.float16, device_map=device
             )
-    elif args.model=='llava-next':
+    elif args.model == "llava-next":
         if args.original is True or args.opera is True:
             print("generating original")
             model = LlavaNextForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16,
-                device_map=device
+                model_path, torch_dtype=torch.float16, device_map=device
             )
         else:
             model = CustomLlavaNextForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16,
-                device_map=device
+                model_path, torch_dtype=torch.float16, device_map=device
             )
     # COCO dataset
     coco, coco_anns = load_coco_data(args.coco_data_dir)
@@ -206,7 +218,7 @@ def main(args):
     sampled_img_ids = None
     if args.use_prev_sample is not None:
         # Load sampled IDs from sample.log
-        with open(args.sample_save_name, 'r') as f:
+        with open(args.sample_save_name, "r") as f:
             sampled_img_ids = [int(line.strip()) for line in f.readlines()]
 
         print(f"Loaded {len(sampled_img_ids)} image IDs from {args.sample_save_name}")
@@ -219,11 +231,13 @@ def main(args):
         sampled_img_ids = sample(img_ids, num_samples)
 
         # Write sampled IDs to a log file
-        with open(args.sample_save_name, 'w') as f:
+        with open(args.sample_save_name, "w") as f:
             for img_id in sampled_img_ids:
                 f.write(f"{img_id}\n")
 
-        print(f"Sampled {num_samples} image IDs and saved them to {args.sample_save_name}")
+        print(
+            f"Sampled {num_samples} image IDs and saved them to {args.sample_save_name}"
+        )
     img_files = []
     for cur_img_id in sampled_img_ids:
         cur_img = coco.loadImgs(cur_img_id)[0]
@@ -246,7 +260,7 @@ def main(args):
     # ---------end prepare sample dataset---------
 
     # ---------begin prepare output data dir---------
-    base_dir = os.path.join("./outputs")
+    base_dir = os.path.join(args.output_dir)
     if not os.path.exists(base_dir):
         os.makedirs(base_dir)
     # ENDCOCOTEST_LOADINGINDEX
@@ -268,32 +282,46 @@ def main(args):
         image_path = os.path.join(args.coco_data_dir, "val2014", img_file)
         image = load_image(image_path)
         prompt = prompt_dict[args.model]
-        if args.model=='instructblip':
-            inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
+        if args.model == "instructblip":
+            inputs = processor(images=image, text=prompt, return_tensors="pt").to(
+                device
+            )
         else:
             inputs = processor(prompt, image, return_tensors="pt").to(device)
         if args.opera is True:
-            output_ids = model.generate(**inputs, max_new_tokens=512, output_attentions=True, output_hidden_states=True, num_beams=3,
-                           opera_decoding=True,
-                           scale_factor=50,
-                           threshold=15,
-                           num_attn_candidates=1,
-                           penalty_weights=1)
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=512,
+                output_attentions=True,
+                output_hidden_states=True,
+                num_beams=3,
+                opera_decoding=True,
+                scale_factor=50,
+                threshold=15,
+                num_attn_candidates=1,
+                penalty_weights=1,
+            )
         elif args.original is True:
-            output_ids = model.generate(**inputs, max_new_tokens=128,
-                                        num_beams=1,
-                                        )
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=128,
+                num_beams=1,
+            )
         else:
-            output_ids = model.generate(**inputs, max_new_tokens=256, num_beams=1,
-                                        pad_token_id=processor.tokenizer.eos_token_id)
-        # print("decoder output ids", output_ids)         
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=256,
+                num_beams=1,
+                pad_token_id=processor.tokenizer.eos_token_id,
+            )
+        # print("decoder output ids", output_ids)
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
-        if args.model == 'llava-1.5':
-            output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
-        elif args.model == 'instructblip':
+        if args.model == "llava-1.5":
+            output_text = output_text[0].split("ASSISTANT:", 1)[-1].strip()
+        elif args.model == "instructblip":
             output_text = output_text[0].strip()
-        elif args.model == 'llava-next':
-            output_text = output_text[0].split('[/INST]', 1)[-1].strip()
+        elif args.model == "llava-next":
+            output_text = output_text[0].split("[/INST]", 1)[-1].strip()
         print(output_text)
         sentence_list = output_text.split(".")
         sentence_filter_list = []
@@ -307,9 +335,7 @@ def main(args):
         # print("caption: ", output_text)
         # 获取时间
 
-        generated_captions_path = os.path.join(
-            base_dir,
-            filename)
+        generated_captions_path = os.path.join(base_dir, filename)
         # print("generated_captions_path", generated_captions_path)
         with open(generated_captions_path, "a") as f:
             json.dump(img_save, f)
@@ -319,7 +345,7 @@ def main(args):
     # -------- begin json data eval --------
     loaded_json = []
 
-    generated_captions_path = "./outputs/"
+    generated_captions_path = args.output_dir
     generated_captions_path = generated_captions_path + filename
     with open(generated_captions_path, "r") as f:
         lines = f.readlines()
@@ -343,7 +369,9 @@ def main(args):
     # imgToEval per image result
     img_to_eval_dict = {}
     # to save memory, load 100 captions at a time
-    for start_idx in tqdm(range(0, len(loaded_json), 100), desc="Generating CHAIR Input"):
+    for start_idx in tqdm(
+        range(0, len(loaded_json), 100), desc="Generating CHAIR Input"
+    ):
         # define the current iteration end index
         end_idx = min(start_idx + 100, len(loaded_json))
         coco_res = coco.loadRes(
@@ -388,10 +416,18 @@ def main(args):
     data_dir = args.coco_data_dir
     chair_input_path = formulated_output_path
     method = args.method
-    if not os.path.exists('./results'):
-        os.makedirs('./results')
-    chair_eval(chair_input_path=chair_input_path, model_type=args.model, num_images=500, output_dir="./results",
-               dataset_name="coco", data_dir=data_dir, metric=method, verbosity=True)
+    if not os.path.exists("./results"):
+        os.makedirs("./results")
+    chair_eval(
+        chair_input_path=chair_input_path,
+        model_type=args.model,
+        num_images=500,
+        output_dir="./results",
+        dataset_name="coco",
+        data_dir=data_dir,
+        metric=method,
+        verbosity=True,
+    )
 
 
 if __name__ == "__main__":
@@ -400,14 +436,15 @@ if __name__ == "__main__":
     parser.add_argument("--use-prev-sample", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--original", type=bool, default=False)
-    parser.add_argument("--sample-save-name",type=str, default="sample.log")
-    parser.add_argument("--image-numbers",type=int,default=500)
+    parser.add_argument("--sample-save-name", type=str, default="sample.log")
+    parser.add_argument("--image-numbers", type=int, default=500)
     parser.add_argument("--gpu-id", type=int, default=0)
-    parser.add_argument("--model", type=str, default='llava-1.5')
-    parser.add_argument("--coco-data-dir",required=True, type=str, default=None)
-    parser.add_argument("--model-path",required=True, type=str, default=None)
+    parser.add_argument("--model", type=str, default="llava-1.5")
+    parser.add_argument("--coco-data-dir", required=True, type=str, default=None)
+    parser.add_argument("--model-path", required=True, type=str, default=None)
     parser.add_argument("--avg", type=bool, default=False)
     parser.add_argument("--voting-numbers", type=int, default=3)
     parser.add_argument("--opera", type=bool, default=False)
+    parser.add_argument("--output-dir", type=str, default="./outputs")
     args = parser.parse_args()
     main(args)

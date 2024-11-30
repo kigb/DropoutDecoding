@@ -8,11 +8,18 @@ model_paths = {
     "llava-next": "llava-hf/llava-v1.6-mistral-7b-hf",
 }
 num_gpus = 1
-all_methods = ["original", "uncertainty-guided"]
+all_methods = [
+    # "original",
+    # "uncertainty-guided",
+    "opera",
+]
 data_dir = "/fsx/zhuokai/maskllama/dataset/COCO"
-all_seeds = [6, 7, 8, 9, 10]
-all_model_names = ["llava-1.5", "instructblip", "llava-next"]
-# all_model_names = ["instructblip"]
+all_seeds = list(range(0, 1))
+all_model_names = [
+    # "llava-1.5",
+    # "instructblip",
+    "llava-next",
+]
 
 for cur_method in all_methods:
     for cur_seed in all_seeds:
@@ -40,11 +47,13 @@ for cur_method in all_methods:
                     f"#SBATCH --output=/fsx/zhuokai/maskllama/slurm/main_experiments/{run_name}.stdout\n",
                     f"#SBATCH --error=/fsx/zhuokai/maskllama/slurm/main_experiments/{run_name}.stderr\n",
                     "\n",
-                    f"python -m chair_test.chair_test --seed {cur_seed} --method {run_name}_ --coco-data-dir {data_dir} --model-path {model_path} --image-numbers 500 --sample-save-name logs/{run_name}.log --model {model_name}",
+                    f"python -m chair_test.chair_test --seed {cur_seed} --method {run_name}_ --coco-data-dir {data_dir} --model-path {model_path} --image-numbers 500 --sample-save-name logs/{run_name}.log --model {model_name} --output-dir outputs/{run_name}",
                 ]
                 if cur_method == "original":
                     lines_to_write.append(" --original True\n")
-                else:
+                elif cur_method == "opera":
+                    lines_to_write.append(" --opera True\n")
+                else:  # uncertainty-guided
                     lines_to_write.append("\n")
                 for cur_line in lines_to_write:
                     f.write(cur_line)
