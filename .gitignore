@@ -7,10 +7,11 @@ outputs_ablations/
 outputs_ablations_additional/
 outputs_main_experiments/
 outputs_old/
-
+__MACOSX/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
+models/__pycache__/
 *.py[cod]
 *$py.class
 

@@ -14,7 +14,7 @@ all_methods = [
     "opera",
 ]
 data_dir = "/fsx/zhuokai/maskllama/dataset/COCO"
-all_seeds = list(range(0, 1))
+all_seeds = list(range(0, 10))
 all_model_names = [
     # "llava-1.5",
     # "instructblip",
@@ -26,6 +26,7 @@ for cur_method in all_methods:
         for model_name in all_model_names:
             model_path = model_paths[model_name]
             run_name = f"{cur_method}_{model_name}_seed_{cur_seed}"
+            output_dir = f"outputs/{cur_method}_{model_name}"
             # generate the slurm file
             script_path = f"./scripts/main_experiments/{run_name}.slurm"
             script_dir = os.path.dirname(script_path)
@@ -47,7 +48,7 @@ for cur_method in all_methods:
                     f"#SBATCH --output=/fsx/zhuokai/maskllama/slurm/main_experiments/{run_name}.stdout\n",
                     f"#SBATCH --error=/fsx/zhuokai/maskllama/slurm/main_experiments/{run_name}.stderr\n",
                     "\n",
-                    f"python -m chair_test.chair_test --seed {cur_seed} --method {run_name}_ --coco-data-dir {data_dir} --model-path {model_path} --image-numbers 500 --sample-save-name logs/{run_name}.log --model {model_name} --output-dir outputs/{run_name}",
+                    f"python -m chair_test.chair_test --seed {cur_seed} --method {run_name}_ --coco-data-dir {data_dir} --model-path {model_path} --image-numbers 500 --sample-save-name logs/{run_name}.log --model {model_name} --output-dir {output_dir}",
                 ]
                 if cur_method == "original":
                     lines_to_write.append(" --original True\n")
