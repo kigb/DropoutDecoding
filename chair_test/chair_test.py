@@ -177,37 +177,38 @@ def main(args):
     settings["use_avg"] = args.avg
     model_path = args.model_path
     processor = AutoProcessor.from_pretrained(model_path)
-    device = f"cuda:{args.gpu_id}"
+    # device = f"cuda:{args.gpu_id}"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("preparing generation")
     if args.model == "llava-1.5":
         if args.original is True:
             print("generating original")
             model = LlavaForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map=device
+                model_path, torch_dtype=torch.float16, device_map="auto"
             )
         else:
             model = CustomLlavaForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map=device
+                model_path, torch_dtype=torch.float16, device_map="auto"
             )
     elif args.model == "instructblip":
         if args.original is True:
             print("generating original")
             model = InstructBlipForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map=device
+                model_path, torch_dtype=torch.float16, device_map="auto"
             )
         else:
             model = CustomInstructBlipForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map=device
+                model_path, torch_dtype=torch.float16, device_map="auto"
             )
     elif args.model == "llava-next":
         if args.original is True or args.opera is True:
             print("generating original")
             model = LlavaNextForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map=device
+                model_path, torch_dtype=torch.float16, device_map="auto"
             )
         else:
             model = CustomLlavaNextForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map=device
+                model_path, torch_dtype=torch.float16, device_map="auto"
             )
     # COCO dataset
     coco, coco_anns = load_coco_data(args.coco_data_dir)
@@ -291,7 +292,7 @@ def main(args):
         if args.opera is True:
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=256,
                 output_attentions=True,
                 output_hidden_states=True,
                 num_beams=3,
@@ -438,7 +439,7 @@ if __name__ == "__main__":
     parser.add_argument("--original", type=bool, default=False)
     parser.add_argument("--sample-save-name", type=str, default="sample.log")
     parser.add_argument("--image-numbers", type=int, default=500)
-    parser.add_argument("--gpu-id", type=int, default=0)
+    # parser.add_argument("--gpu-id", type=int, default=0)
     parser.add_argument("--model", type=str, default="llava-1.5")
     parser.add_argument("--coco-data-dir", required=True, type=str, default=None)
     parser.add_argument("--model-path", required=True, type=str, default=None)
