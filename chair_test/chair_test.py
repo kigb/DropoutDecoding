@@ -184,7 +184,7 @@ def main(args):
                 device_map=device
             )
     elif args.model=='llava-next':
-        if args.original is True:
+        if args.original is True or args.opera is True:
             print("generating original")
             model = LlavaNextForConditionalGeneration.from_pretrained(
                 model_path,
@@ -272,13 +272,21 @@ def main(args):
             inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
         else:
             inputs = processor(prompt, image, return_tensors="pt").to(device)
-        if args.original is True:
-            output_ids = model.generate(**inputs, max_new_tokens=512,
+        if args.opera is True:
+            output_ids = model.generate(**inputs, max_new_tokens=512, output_attentions=True, output_hidden_states=True, num_beams=3,
+                           opera_decoding=True,
+                           scale_factor=50,
+                           threshold=15,
+                           num_attn_candidates=1,
+                           penalty_weights=1)
+        elif args.original is True:
+            output_ids = model.generate(**inputs, max_new_tokens=128,
                                         num_beams=1,
                                         )
         else:
-            output_ids = model.generate(**inputs, max_new_tokens=512, num_beams=1,
+            output_ids = model.generate(**inputs, max_new_tokens=256, num_beams=1,
                                         pad_token_id=processor.tokenizer.eos_token_id)
+        # print("decoder output ids", output_ids)         
         output_text = processor.batch_decode(output_ids, skip_special_tokens=True)
         if args.model == 'llava-1.5':
             output_text = output_text[0].split('ASSISTANT:', 1)[-1].strip()
@@ -286,7 +294,7 @@ def main(args):
             output_text = output_text[0].strip()
         elif args.model == 'llava-next':
             output_text = output_text[0].split('[/INST]', 1)[-1].strip()
-        # print(output_text)
+        print(output_text)
         sentence_list = output_text.split(".")
         sentence_filter_list = []
         for sentence in sentence_list:
@@ -306,6 +314,7 @@ def main(args):
         with open(generated_captions_path, "a") as f:
             json.dump(img_save, f)
             f.write("\n")
+
     print("the result is saved into", base_dir, filename)
     # -------- begin json data eval --------
     loaded_json = []
@@ -399,5 +408,6 @@ if __name__ == "__main__":
     parser.add_argument("--model-path",required=True, type=str, default=None)
     parser.add_argument("--avg", type=bool, default=False)
     parser.add_argument("--voting-numbers", type=int, default=3)
+    parser.add_argument("--opera", type=bool, default=False)
     args = parser.parse_args()
     main(args)
