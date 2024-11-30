@@ -7,14 +7,14 @@ model_paths = {
     "instructblip": "Salesforce/instructblip-vicuna-7b",
     "llava-next": "llava-hf/llava-v1.6-mistral-7b-hf",
 }
-num_gpus = 1
+num_gpus = 2
 all_methods = [
     # "original",
     # "uncertainty-guided",
     "opera",
 ]
 data_dir = "/fsx/zhuokai/maskllama/dataset/COCO"
-all_seeds = list(range(0, 10))
+all_seeds = list(range(0, 30))
 all_model_names = [
     # "llava-1.5",
     # "instructblip",
