@@ -292,7 +292,7 @@ def main(args):
         if args.opera is True:
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=256,
+                max_new_tokens=512,
                 output_attentions=True,
                 output_hidden_states=True,
                 num_beams=3,
@@ -305,13 +305,13 @@ def main(args):
         elif args.original is True:
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=128,
+                max_new_tokens=512,
                 num_beams=1,
             )
         else:
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=256,
+                max_new_tokens=512,
                 num_beams=1,
                 pad_token_id=processor.tokenizer.eos_token_id,
             )
