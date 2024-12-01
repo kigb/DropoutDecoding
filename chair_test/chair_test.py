@@ -289,30 +289,46 @@ def main(args):
             )
         else:
             inputs = processor(prompt, image, return_tensors="pt").to(device)
-        if args.opera is True:
+
+        if args.original is True:
+            if args.num_beams is not None:
+                num_beams = args.num_beams
+            else:
+                num_beams = 1
+
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=512,
+                num_beams=num_beams,
+            )
+        elif args.opera is True:
+            if args.num_beams is not None:
+                num_beams = args.num_beams
+            else:
+                num_beams = 3
+
             output_ids = model.generate(
                 **inputs,
                 max_new_tokens=512,
                 output_attentions=True,
                 output_hidden_states=True,
-                num_beams=3,
+                num_beams=num_beams,
                 opera_decoding=True,
                 scale_factor=50,
                 threshold=15,
                 num_attn_candidates=1,
                 penalty_weights=1,
             )
-        elif args.original is True:
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=512,
-                num_beams=1,
-            )
         else:
+            if args.num_beams is not None:
+                num_beams = args.num_beams
+            else:
+                num_beams = 1
+
             output_ids = model.generate(
                 **inputs,
                 max_new_tokens=512,
-                num_beams=1,
+                num_beams=num_beams,
                 pad_token_id=processor.tokenizer.eos_token_id,
             )
         # print("decoder output ids", output_ids)
@@ -437,6 +453,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-prev-sample", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--original", type=bool, default=False)
+    parser.add_argument("--num-beams", type=int, default=None)
     parser.add_argument("--sample-save-name", type=str, default="sample.log")
     parser.add_argument("--image-numbers", type=int, default=500)
     # parser.add_argument("--gpu-id", type=int, default=0)
