@@ -182,7 +182,7 @@ def main(args):
         processor = AutoProcessor.from_pretrained(model_path)
 
     # device = f"cuda:{args.gpu_id}"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     print("preparing generation")
     if args.model == "llava-1.5":
         if args.original is True:
@@ -318,7 +318,7 @@ def main(args):
                 output_hidden_states=True,
                 num_beams=num_beams,
                 opera_decoding=True,
-                scale_factor=50,
+                scale_factor=5,
                 threshold=15,
                 num_attn_candidates=1,
                 penalty_weights=1,
