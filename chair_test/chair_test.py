@@ -176,7 +176,11 @@ def main(args):
         )
     settings["use_avg"] = args.avg
     model_path = args.model_path
-    processor = AutoProcessor.from_pretrained(model_path)
+    if args.model == "instructblip" or args.model == "llava-1.5":
+        processor = AutoProcessor.from_pretrained(model_path, use_fast=False)
+    else:
+        processor = AutoProcessor.from_pretrained(model_path)
+
     # device = f"cuda:{args.gpu_id}"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("preparing generation")
