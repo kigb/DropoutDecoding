@@ -182,7 +182,7 @@ def main(args):
         processor = AutoProcessor.from_pretrained(model_path)
 
     # device = f"cuda:{args.gpu_id}"
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("preparing generation")
     if args.model == "llava-1.5":
         if args.original is True:
@@ -198,11 +198,11 @@ def main(args):
         if args.original is True:
             print("generating original")
             model = InstructBlipForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map="auto"
+                model_path, torch_dtype=torch.float16, device_map=device
             )
         else:
             model = CustomInstructBlipForConditionalGeneration.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map="auto"
+                model_path, torch_dtype=torch.float16, device_map=device
             )
     elif args.model == "llava-next":
         if args.original is True or args.opera is True:
