@@ -205,7 +205,7 @@ def main(args):
                 model_path, torch_dtype=torch.float16, device_map=device
             )
     elif args.model == "llava-next":
-        if args.original is True or args.opera is True:
+        if args.original is True or args.opera is True or args.vcd is True:
             print("generating original")
             model = LlavaNextForConditionalGeneration.from_pretrained(
                 model_path, torch_dtype=torch.float16, device_map="auto"
@@ -323,6 +323,17 @@ def main(args):
                 num_attn_candidates=1,
                 penalty_weights=1,
             )
+        elif args.vcd is True:
+            output_ids =model.generate(
+                **inputs, 
+                max_new_tokens=512,
+                use_cd = True,
+                cd_alpha = 1,
+                cd_beta = 0.1,
+                do_sample=True,
+                temperature=1.0,
+                top_p=1,
+                top_k=None,)
         else:
             if args.num_beams is not None:
                 num_beams = args.num_beams
@@ -467,6 +478,7 @@ if __name__ == "__main__":
     parser.add_argument("--avg", type=bool, default=False)
     parser.add_argument("--voting-numbers", type=int, default=3)
     parser.add_argument("--opera", type=bool, default=False)
+    parser.add_argument("--vcd", type=bool, default=False)
     parser.add_argument("--output-dir", type=str, default="./outputs")
     args = parser.parse_args()
     main(args)
