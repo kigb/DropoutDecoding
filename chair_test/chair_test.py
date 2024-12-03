@@ -328,7 +328,7 @@ def main(args):
                 **inputs, 
                 max_new_tokens=512,
                 use_cd = True,
-                cd_alpha = 1,
+                cd_alpha = 0.5,
                 cd_beta = 0.1,
                 do_sample=True,
                 temperature=1.0,
