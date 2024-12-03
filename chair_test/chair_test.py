@@ -160,16 +160,14 @@ def chair_eval(
 
 def main(args):
     # load model
+    if args.use_random is True:
+        settings["use_random"] = [True]
     if args.voting_numbers == 1:
-        settings["voting_numbers"] = [0.5]
+        settings["voting_numbers"] = [0.3]
     elif args.voting_numbers == 2:
-        settings["voting_numbers"] = [0.3, 0.5]
-    elif args.voting_numbers == 3:
-        pass
+        settings["voting_numbers"] = [0.5, 0.3]
     elif args.voting_numbers == 4:
         settings["voting_numbers"] = [0.1, 0.3, 0.5, 0.7]
-    elif args.voting_numbers == 5:
-        settings["voting_numbers"] = [0.1, 0.3, 0.5, 0.7, 0.9]
     else:
         print(
             "unsupport voting number, this should be from 1 to 5 and will be set to 3 by default"
@@ -479,6 +477,7 @@ if __name__ == "__main__":
     parser.add_argument("--voting-numbers", type=int, default=3)
     parser.add_argument("--opera", type=bool, default=False)
     parser.add_argument("--vcd", type=bool, default=False)
+    parser.add_argument("--use_random", type=bool, default=False)
     parser.add_argument("--output-dir", type=str, default="./outputs")
     args = parser.parse_args()
     main(args)

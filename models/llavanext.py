@@ -13,6 +13,7 @@ import json
 import copy
 from collections import Counter
 import torch.nn.functional as F
+from models.config import settings
 # seed = 114115
 seed = 506
 torch.manual_seed(seed)
@@ -539,11 +540,15 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
         max_vote = True
         if not self.is_first_generation:
             outputs_all = [] # refresh outputs_all
-            probs = [0.3,0.5,0.7]
+            probs = settings['voting_numbers']
             for prob in probs:
                 original_past_key_values_ = copy.deepcopy(original_past_key_values)
                 attention_mask = restore_attention_mask(attention_mask)
-                attention_mask = self.get_image_attention_mask(logits, attention_mask, method="epis", prob=prob)
+                if settings['use_random'][0] is True:
+                    method_ = 'epis_no_overlap'
+                else:
+                    method_ = 'epis'
+                attention_mask = self.get_image_attention_mask(logits, attention_mask, method=method_, prob=prob)
                 outputs_all.append(
                     self.language_model(
                         attention_mask=attention_mask,
@@ -772,32 +777,11 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
                 if random_num < 0.2:
                     attention_mask[:, i] = 0
         elif method== "epis":
-            # matched_indices = self.get_overlap_image_tokens(logits)
-            # adjusted_indices_tensor = matched_indices.clone().detach()
-            # epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"]
-            # indexes = torch.where(epis_uncert[0] < 1)[0]
-            # random_tensor = torch.rand_like(indexes.float())
-            # # depend on epis score mask least percent
-            # # uniform
-            # # compare mask method whatever performance
-            # mask = random_tensor <= prob
-            # filtered_indexes = indexes[mask]
-            # attention_mask[:,filtered_indexes+self.start_image_pos[0]] = 0
-            # attention_mask[:, adjusted_indices_tensor] = 1
+
 
             matched_indices = self.get_overlap_image_tokens(logits)
             adjusted_indices_tensor = matched_indices.clone().detach()
-            # epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
-            #
-            # # 1. 计算 `epis_uncert` 的 `prob` 百分位数阈值
-            # threshold = torch.quantile(epis_uncert, prob)
-            #
-            # # 2. 获取小于或等于该阈值的索引
-            # indexes = torch.where(epis_uncert >= threshold)[0]
-            #
-            # # 3. 设置 `attention_mask` 中 `filtered_indexes` 的位置为 0
-            # attention_mask[:, indexes + self.start_image_pos[0]] = 0
-            # attention_mask[:, adjusted_indices_tensor] = 1
+
 
             epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
 
@@ -822,6 +806,27 @@ class CustomLlavaNextForConditionalGeneration(LlavaNextForConditionalGeneration)
 
             # 恢复 attention_mask 的某些索引为 1
             attention_mask[:, adjusted_indices_tensor] = 1
+        elif method=="epis_no_overlap":
+            epis_uncert = self.vision_uncert_dict["epis_uncert_per_token"][0]
+
+            # 获取 epis_uncert 的 0.1 和 0.7 分位数
+            q_low = torch.quantile(epis_uncert, 0)
+            q_high = torch.quantile(epis_uncert, 1)
+
+            # 使用线性插值将 epis_uncert 映射到 [0.1, 0.7] 范围
+            # clamp 是为了确保数据在分位数范围内，并进行插值
+            normalized_probs = 0.1 + (prob - 0.1) * (epis_uncert.clamp(min=q_low, max=q_high) - q_low) / (
+                    q_high - q_low)
+
+            # 生成与 epis_uncert 相同形状的随机张量
+            random_tensor = torch.rand_like(epis_uncert)
+
+            # 根据生成的随机张量与 normalized_probs 确定 mask
+            mask = random_tensor < normalized_probs
+            filtered_indexes = torch.where(mask)[0]
+
+            # 设置 attention_mask 中的指定位置为 0
+            attention_mask[:, filtered_indexes + self.start_image_pos[0]] = 0
 
         return attention_mask
     
