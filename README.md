@@ -1,4 +1,14 @@
-# Uncertainty Guided Decoding Enhancement Improves the Reliability of VLMs
+# From Uncertainty to Trust: Enhancing Reliability in Vision-Language Models with Uncertainty-Guided Dropout Decoding
+
+## Overview
+
+<img src="/home/fyx/hallucination/imgs/outline3.png"/></p>
+Large vision-language models (LVLMs) demonstrate remarkable capabilities in multimodal tasks but are prone to misinterpreting visual inputs, often resulting in hallucinations and unreliable outputs.
+To address these challenges, we propose ***Dropout Decoding***, a novel inference-time approach that quantifies the uncertainty of visual tokens and selectively masks uncertain tokens to improve decoding.
+Our method measures the uncertainty of each visual token by projecting it onto the text token space and decomposes it into aleatoric and epistemic components. We focus on epistemic uncertainty, as it captures perception-related errors more effectively.
+Inspired by dropout regularization, we introduce uncertainty-guided token dropout, which applies the dropout principle to input visual tokens instead of model parameters, and during inference rather than training.
+By aggregating predictions from an ensemble of masked decoding contexts, ***Dropout Decoding*** robustly mitigates errors arising from visual token misinterpretations.
+Evaluations on benchmarks such as CHAIR, THRONE, and MMBench demonstrate that ***Dropout Decoding*** significantly reduces object hallucinations (OH) and enhances the reliability and quality of LVLM outputs across diverse visual contexts.
 
 ## Setup
 
@@ -6,9 +16,8 @@ to setup the environment, execute the following command:
 
 ```bash
 conda env create -f environment.yml
-conda activate udgv
+conda activate dropout_decoding
 ```
-
 ## Evaluation
 
 ### Chair

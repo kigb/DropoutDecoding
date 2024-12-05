@@ -1,4 +1,4 @@
-name: udgv
+name: dropout_decoding
 channels:
   - conda-forge
   - defaults
