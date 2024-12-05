@@ -2,7 +2,7 @@
 
 ## Overview
 
-<img src="/home/fyx/hallucination/imgs/outline3.png"/></p>
+<img src="./imgs/outline3.png"/></p>
 Large vision-language models (LVLMs) demonstrate remarkable capabilities in multimodal tasks but are prone to misinterpreting visual inputs, often resulting in hallucinations and unreliable outputs.
 To address these challenges, we propose ***Dropout Decoding***, a novel inference-time approach that quantifies the uncertainty of visual tokens and selectively masks uncertain tokens to improve decoding.
 Our method measures the uncertainty of each visual token by projecting it onto the text token space and decomposes it into aleatoric and epistemic components. We focus on epistemic uncertainty, as it captures perception-related errors more effectively.
